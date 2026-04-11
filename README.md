@@ -1,49 +1,49 @@
 # doudian-review-insight
 
-A local-first web app for importing Douyin shop review Excel files, extracting pain points, and visualizing multi-shop insights on your own machine.
+一个本地优先的抖店评论分析 Web 应用，用来在你自己的电脑上导入评论 Excel、提取痛点，并查看多店铺的可视化分析结果。
 
-## What It Does
+## 项目用途
 
-- Manage multiple shops in one workspace
-- Maintain product metadata such as aliases, categories, and notes
-- Upload review Excel files and link each batch to a specific shop
-- Deduplicate repeated uploads by file content within the same shop
-- Extract pain points with three analysis modes:
+- 在一个工作台里管理多个店铺
+- 维护商品元数据，例如别名、分类和备注
+- 上传评论 Excel，并将每个上传批次绑定到指定店铺
+- 按文件内容对同店铺的重复上传做去重
+- 支持三种评论分析模式：
   - `rules_only`
   - `llm_only`
   - `hybrid`
-- Persist data locally in SQLite
-- Browse dashboard stats, pain point history, recent additions, and raw reviews
-- Protect the workspace with a single local password
+- 使用 SQLite 在本地持久化保存数据
+- 查看总览、历史痛点、近期开启的新痛点和原始评论
+- 使用单密码保护本地工作台
 
-## Stack
+## 技术栈
 
 - React 19 + Vite + TypeScript
 - Express + TypeScript
-- SQLite via Drizzle + `@libsql/client`
+- SQLite + Drizzle + `@libsql/client`
 - Wouter
 - TanStack Query
 - Zod
 - Recharts
-- OpenAI-compatible LLM API
+- OpenAI 兼容 LLM 接口
 
-## Main Screens
+## 主要页面
 
-- `总览` - overview metrics and recent trends
-- `店铺` - create and manage shops
-- `商品` - maintain product metadata by shop
-- `上传` - import Excel review batches
-- `分析设置` - switch between rules and LLM analysis modes, configure the LLM endpoint locally
-- `痛点` - historical and recent pain point views
-- `评论` - search and filter raw reviews
+- `总览`：查看核心指标和最近趋势
+- `店铺`：创建和管理店铺
+- `商品`：按店铺维护商品元数据
+- `上传`：导入评论 Excel 批次
+- `分析设置`：切换规则 / LLM 分析模式，并在前端本地配置 LLM 接口
+- `痛点`：查看历史痛点和近期新增痛点
+- `评论`：搜索和筛选原始评论
 
-## Requirements
+## 运行要求
 
 - Node.js 20+
 - pnpm 10+
-- Windows, macOS, or Linux
+- Windows、macOS 或 Linux
 
-## Quick Start
+## 快速开始
 
 ```bash
 pnpm install
@@ -52,14 +52,14 @@ pnpm drizzle:migrate
 pnpm dev
 ```
 
-Then open:
+启动后访问：
 
-- Frontend: `http://localhost:5173`
-- Backend API: `http://localhost:5174`
+- 前端：`http://localhost:5173`
+- 后端 API：`http://localhost:5174`
 
-## Environment Setup
+## 环境变量配置
 
-Copy `.env.example` to `.env` and update at least these values:
+先复制 `.env.example` 为 `.env`，至少需要确认这些配置：
 
 ```env
 PORT=5174
@@ -75,92 +75,92 @@ LLM_MAX_CONCURRENCY=3
 RULES_PATH=./server/jobs/rules/zh.json
 ```
 
-Notes:
+说明：
 
-- `APP_PASSWORD` must be at least 12 characters
-- `SESSION_SECRET` must be at least 32 characters
-- The `OPENAI_*` values are startup defaults only
-- After the app starts, you can update analysis settings from the frontend and the values are persisted in the local database
-- If you only want rule-based analysis, you can keep the app in `rules_only` mode from the `分析设置` page
+- `APP_PASSWORD` 至少需要 12 位
+- `SESSION_SECRET` 至少需要 32 位
+- `OPENAI_*` 这些值只是首次启动时的默认分析配置
+- 应用启动后，你可以直接在前端 `分析设置` 页面里修改分析参数，并持久化保存到本地数据库
+- 如果你只想使用规则分析，可以在 `分析设置` 页面切换到 `rules_only`
 
-## Scripts
+## 常用脚本
 
 ```bash
-pnpm dev              # run frontend and backend in development
-pnpm check            # run TypeScript typecheck
-pnpm test             # run tests
-pnpm build            # build client and server
-pnpm start            # run the production server from dist
-pnpm drizzle:migrate  # run database migrations
-pnpm drizzle:generate # generate new Drizzle migrations
+pnpm dev              # 同时启动前端和后端开发环境
+pnpm check            # 运行 TypeScript 类型检查
+pnpm test             # 运行测试
+pnpm build            # 构建前端和后端
+pnpm start            # 从 dist 启动生产模式服务
+pnpm drizzle:migrate  # 执行数据库迁移
+pnpm drizzle:generate # 生成新的 Drizzle 迁移文件
 ```
 
-## Analysis Modes
+## 分析模式
 
-The app supports three analysis strategies in `分析设置`:
+应用在 `分析设置` 页面中支持三种分析策略：
 
-- `rules_only` - local keyword rules only
-- `llm_only` - send review text directly to the configured LLM endpoint
-- `hybrid` - use rules first, then fall back to LLM when needed
+- `rules_only`：只使用本地关键词规则
+- `llm_only`：把评论文本直接发给配置好的 LLM 接口进行抽取
+- `hybrid`：优先使用规则，规则未命中时再回退到 LLM
 
-LLM settings are stored locally and include:
+本地保存的 LLM 配置包括：
 
-- API base URL
-- API key
-- model name
-- batch size
-- max concurrency
+- API Base URL
+- API Key
+- 模型名称
+- 批大小
+- 最大并发数
 
-The frontend never displays the full saved API key again after save; it only shows a masked version.
+前端在保存后不会再次展示完整 API Key，只会显示脱敏后的遮罩值。
 
-## Upload Behavior
+## 上传流程
 
-When you upload an Excel file:
+上传一份 Excel 时，系统会按下面的流程处理：
 
-1. The batch is associated with the selected shop
-2. The server normalizes the file name and stores the file temporarily
-3. The server hashes the file contents
-4. If the same shop already has a non-failed upload with the same file hash, the upload is rejected as a duplicate
-5. New rows are parsed, deduplicated, analyzed, and merged into local SQLite data
+1. 将该批次关联到你当前选择的店铺
+2. 规范化文件名，并把文件临时保存到本地目录
+3. 对文件内容生成哈希值
+4. 如果同店铺已经存在内容相同且不是失败状态的上传记录，则直接拦截为重复上传
+5. 对新数据执行解析、去重、分析，并合并写入本地 SQLite
 
-## Local Data
+## 本地数据目录
 
-Runtime data is stored under `data/` and is intentionally ignored by git:
+运行时数据保存在 `data/` 下，并且默认不会进入 git：
 
-- `data/app.db` - SQLite database
-- `data/uploads-tmp/` - temporary uploaded Excel files
-- `data/logs/` - app logs
+- `data/app.db`：SQLite 数据库
+- `data/uploads-tmp/`：临时保存的上传 Excel 文件
+- `data/logs/`：应用日志
 
-## Production Build
+## 生产构建
 
 ```bash
 pnpm build
 pnpm start
 ```
 
-In production mode, Express serves the built frontend from `dist/client`, so the app runs on a single port.
+生产模式下，Express 会直接托管 `dist/client` 里的前端静态资源，因此整个应用只需要一个端口即可运行。
 
-## Current Validation Status
+## 当前验证状态
 
-The current codebase has been validated with:
+当前代码已经完成以下基础验证：
 
 - `pnpm check`
 - `pnpm test`
 - `pnpm build`
 - `pnpm drizzle:migrate`
 
-## Project Structure
+## 项目结构
 
 ```text
-client/   React frontend
-server/   Express API, jobs, auth, and database wiring
-shared/   shared Zod schemas and TypeScript types
-drizzle/  SQL migrations and metadata
-data/     local runtime data, ignored by git
+client/   React 前端
+server/   Express API、后台任务、认证和数据库接线
+shared/   前后端共享的 Zod schema 和 TypeScript 类型
+drizzle/  SQL 迁移文件和元数据
+data/     本地运行数据目录，已被 git 忽略
 ```
 
-## Notes
+## 说明
 
-- This project is built for local-first usage rather than cloud deployment
-- It does not rely on Douyin open platform APIs; review data is imported manually from exported Excel files
-- The app is designed to stay generic and not hardcode any industry-specific prompt behavior
+- 这是一个本地优先工具，不是云端部署产品
+- 项目不依赖抖店开放平台 API，评论数据通过手动导出的 Excel 导入
+- 整个分析流程尽量保持通用，不会把 prompt 或规则硬编码成某个特定行业
