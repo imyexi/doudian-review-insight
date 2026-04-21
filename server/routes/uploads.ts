@@ -6,10 +6,10 @@ import { and, desc, eq, ne } from "drizzle-orm";
 import { Router } from "express";
 import { uploadCreateSchema } from "@shared/types";
 import { db } from "../db/client";
-import { uploads } from "../db/schema";
-import { analyzeUpload } from "../jobs/analyze";
+import { shops, uploads } from "../db/schema";
 import { analyzeQueue } from "../jobs/queue";
 import { env } from "../env";
+import { deleteUploadBatch } from "../services/deleteUploadBatch";
 import { sendError, sendSuccess } from "../utils/http";
 import { normalizeUploadedFilename, serializeUpload } from "../utils/uploadFilename";
 
@@ -40,27 +40,46 @@ function formatUploadTime(timestamp: number): string {
   return new Date(timestamp * 1000).toLocaleString("zh-CN", { hour12: false });
 }
 
+function parseShopId(value: unknown): number {
+  return typeof value === "string" ? Number(value) : Number.NaN;
+}
+
+async function shopExists(shopId: number): Promise<boolean> {
+  const [shop] = await db.select({ id: shops.id }).from(shops).where(eq(shops.id, shopId)).limit(1);
+  return Boolean(shop);
+}
+
 export const uploadsRouter = Router();
 
 uploadsRouter.get("/", async (request, response) => {
-  const rawShopId = request.query.shopId;
-  const shopId = rawShopId ? Number(rawShopId) : null;
+  const shopId = parseShopId(request.query.shopId);
+  if (!Number.isInteger(shopId) || shopId <= 0) {
+    sendError(response, "INVALID_ID", "店铺 ID 无效", 400);
+    return;
+  }
 
-  const rows = shopId && Number.isInteger(shopId)
-    ? await db.select().from(uploads).where(eq(uploads.shopId, shopId)).orderBy(desc(uploads.createdAt), desc(uploads.id))
-    : await db.select().from(uploads).orderBy(desc(uploads.createdAt), desc(uploads.id));
+  const rows = await db
+    .select()
+    .from(uploads)
+    .where(eq(uploads.shopId, shopId))
+    .orderBy(desc(uploads.createdAt), desc(uploads.id));
 
   sendSuccess(response, rows.map(row => serializeUpload(row)));
 });
 
 uploadsRouter.get("/:id", async (request, response) => {
   const uploadId = Number(request.params.id);
-  if (!Number.isInteger(uploadId) || uploadId <= 0) {
-    sendError(response, "INVALID_ID", "上传 ID 无效", 400);
+  const shopId = parseShopId(request.query.shopId);
+  if (!Number.isInteger(uploadId) || uploadId <= 0 || !Number.isInteger(shopId) || shopId <= 0) {
+    sendError(response, "INVALID_ID", "上传 ID 或店铺 ID 无效", 400);
     return;
   }
 
-  const [row] = await db.select().from(uploads).where(eq(uploads.id, uploadId)).limit(1);
+  const [row] = await db
+    .select()
+    .from(uploads)
+    .where(and(eq(uploads.id, uploadId), eq(uploads.shopId, shopId)))
+    .limit(1);
   if (!row) {
     sendError(response, "NOT_FOUND", "上传记录不存在", 404);
     return;
@@ -76,6 +95,14 @@ uploadsRouter.post("/", uploadMiddleware.single("file"), async (request, respons
       fs.rmSync(request.file.path, { force: true });
     }
     sendError(response, "INVALID_INPUT", parsed.error.issues[0]?.message ?? "上传参数无效", 400);
+    return;
+  }
+
+  if (!(await shopExists(parsed.data.shopId))) {
+    if (request.file?.path) {
+      fs.rmSync(request.file.path, { force: true });
+    }
+    sendError(response, "NOT_FOUND", "店铺不存在", 404);
     return;
   }
 
@@ -131,12 +158,7 @@ uploadsRouter.post("/", uploadMiddleware.single("file"), async (request, respons
       })
       .returning();
 
-    analyzeQueue.enqueue({
-      id: String(created.id),
-      run: async () => {
-        await analyzeUpload(created.id);
-      },
-    });
+    analyzeQueue.enqueueUpload(created.id);
 
     sendSuccess(response, { uploadId: created.id }, 201);
   } catch (error) {
@@ -147,19 +169,17 @@ uploadsRouter.post("/", uploadMiddleware.single("file"), async (request, respons
 
 uploadsRouter.delete("/:id", async (request, response) => {
   const uploadId = Number(request.params.id);
-  if (!Number.isInteger(uploadId) || uploadId <= 0) {
-    sendError(response, "INVALID_ID", "上传 ID 无效", 400);
+  const shopId = Number(request.query.shopId);
+  if (!Number.isInteger(uploadId) || uploadId <= 0 || !Number.isInteger(shopId) || shopId <= 0) {
+    sendError(response, "INVALID_ID", "上传 ID 或店铺 ID 无效", 400);
     return;
   }
 
-  const [row] = await db.select().from(uploads).where(eq(uploads.id, uploadId)).limit(1);
-  if (!row) {
+  const deletedUpload = await deleteUploadBatch(shopId, uploadId);
+  if (!deletedUpload) {
     sendError(response, "NOT_FOUND", "上传记录不存在", 404);
     return;
   }
 
-  await db.delete(uploads).where(and(eq(uploads.id, uploadId), eq(uploads.shopId, row.shopId)));
-  fs.rmSync(row.storedPath, { force: true });
-
-  sendSuccess(response, { id: uploadId, deleted: true });
+  sendSuccess(response, deletedUpload);
 });

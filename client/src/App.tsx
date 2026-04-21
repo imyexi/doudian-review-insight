@@ -65,8 +65,7 @@ function LoginPage({ isSubmitting, onSubmit }: LoginPageProps): ReactElement {
 }
 
 function AppLayout(): ReactElement {
-  const [location] = useLocation();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const { selectedShopId, setSelectedShopId, shops } = useShop();
   const logoutMutation = useMutation({
     mutationFn: () => apiPost<AuthState, Record<string, never>>("/auth/logout", {}),
@@ -111,8 +110,7 @@ function AppLayout(): ReactElement {
 }
 
 export function App(): ReactElement {
-  const [location] = useLocation();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const authQuery = useQuery({
     queryKey: ["auth", "me"],
     queryFn: () => apiGet<AuthState>("/auth/me", { skipAuthRedirect: true }),

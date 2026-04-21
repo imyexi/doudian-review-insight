@@ -1,23 +1,13 @@
 import { useMemo, useState, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ProductInput } from "@shared/types";
-import { apiDelete, apiGet, apiPatch, apiPost, ApiRequestError } from "@/api/client";
+import type { Product, ProductGroup, ProductInput, ProductRegroupInput } from "@shared/types";
+import { apiDelete, apiGet, apiPatch, apiPost, getRequestErrorMessage } from "@/api/client";
 import { EmptyShopState } from "@/components/EmptyShopState";
 import { useShop } from "@/hooks/useShop";
 import { formatTimestamp } from "@/lib/format";
 
-interface ProductListItem {
-  id: number;
-  shopId: number;
-  doudianProductId: string;
-  displayName: string | null;
-  rawName: string | null;
-  category: string | null;
-  notes: string | null;
-  enabled: boolean;
-  createdAt: number;
-  updatedAt: number;
-  latestReviewTime: number | null;
+interface ProductGroupListItem extends ProductGroup {
+  productCount: number;
   painPointCount: number;
 }
 
@@ -50,12 +40,28 @@ function toPayload(form: ProductFormState): ProductInput {
   };
 }
 
-function getErrorMessage(error: unknown): string {
-  if (error instanceof ApiRequestError) {
-    return error.message;
+function getProductDisplayLabel(product: Product): string {
+  return product.displayName || product.rawName || product.doudianProductId;
+}
+
+function getProductGroupLabel(group: Pick<ProductGroup, "name" | "shortName"> | null | undefined): string {
+  if (!group) {
+    return "未归组";
   }
 
-  return "操作失败，请稍后重试。";
+  return group.name === group.shortName ? group.name : `${group.name} · ${group.shortName}`;
+}
+
+function getClassificationSourceLabel(product: Pick<Product, "classificationSource" | "classificationLocked">): string {
+  if (product.classificationSource === "manual") {
+    return "人工改组";
+  }
+
+  if (product.classificationLocked) {
+    return "已锁定";
+  }
+
+  return "自动归组";
 }
 
 export function ProductsPage(): ReactElement {
@@ -63,13 +69,60 @@ export function ProductsPage(): ReactElement {
   const { selectedShop, selectedShopId } = useShop();
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<ProductFormState>(EMPTY_PRODUCT_FORM);
+  const [regroupTargetId, setRegroupTargetId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<string>("");
 
   const productsQuery = useQuery({
     queryKey: ["products", selectedShopId],
-    queryFn: () => apiGet<ProductListItem[]>(`/shops/${selectedShopId}/products`),
+    queryFn: () => apiGet<Product[]>(`/shops/${selectedShopId}/products`),
     enabled: selectedShopId !== null,
   });
+
+  const productGroupsQuery = useQuery({
+    queryKey: ["product-groups", selectedShopId],
+    queryFn: () => apiGet<ProductGroupListItem[]>(`/shops/${selectedShopId}/products/groups`),
+    enabled: selectedShopId !== null,
+  });
+
+  async function invalidateProductQueries(): Promise<void> {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["products", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["product-groups", selectedShopId] }),
+    ]);
+  }
+
+  async function invalidateAnalyticsQueries(): Promise<void> {
+    if (selectedShopId === null) {
+      return;
+    }
+
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["pain-points", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["pain-points", "review-filters", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["reviews", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["stats", selectedShopId] }),
+    ]);
+  }
+
+  function resetEditor(): void {
+    setEditingId(null);
+    setForm(EMPTY_PRODUCT_FORM);
+    setRegroupTargetId(null);
+  }
+
+  function beginEditing(product: Product): void {
+    setEditingId(product.id);
+    setForm({
+      doudianProductId: product.doudianProductId,
+      displayName: product.displayName ?? "",
+      rawName: product.rawName ?? "",
+      category: product.category ?? "",
+      notes: product.notes ?? "",
+      enabled: product.enabled,
+    });
+    setRegroupTargetId(product.productGroupId);
+    setFeedback("");
+  }
 
   const saveMutation = useMutation({
     mutationFn: async (payload: ProductInput) => {
@@ -78,19 +131,37 @@ export function ProductsPage(): ReactElement {
       }
 
       if (editingId) {
-        return apiPatch<ProductListItem, Partial<ProductInput>>(`/shops/${selectedShopId}/products/${editingId}`, payload);
+        return apiPatch<Product, Partial<ProductInput>>(`/shops/${selectedShopId}/products/${editingId}`, payload);
       }
 
-      return apiPost<ProductListItem, ProductInput>(`/shops/${selectedShopId}/products`, payload);
+      return apiPost<Product, ProductInput>(`/shops/${selectedShopId}/products`, payload);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["products", selectedShopId] });
-      setEditingId(null);
-      setForm(EMPTY_PRODUCT_FORM);
-      setFeedback(editingId ? "商品信息已更新。" : "商品已创建。");
+      await invalidateProductQueries();
+      resetEditor();
+      setFeedback(editingId ? "商品信息已更新。" : "商品已创建，并已按短名称自动归组。");
     },
     onError: error => {
-      setFeedback(getErrorMessage(error));
+      setFeedback(getRequestErrorMessage(error, "操作失败，请稍后重试。"));
+    },
+  });
+
+  const regroupMutation = useMutation({
+    mutationFn: async (payload: ProductRegroupInput) => {
+      if (!selectedShopId || !editingId) {
+        throw new Error("请先选择要调整归组的商品");
+      }
+
+      return apiPatch<Product, ProductRegroupInput>(`/shops/${selectedShopId}/products/${editingId}/regroup`, payload);
+    },
+    onSuccess: async updatedProduct => {
+      await invalidateProductQueries();
+      await invalidateAnalyticsQueries();
+      setRegroupTargetId(updatedProduct.productGroupId);
+      setFeedback(`商品已改到“${getProductGroupLabel(updatedProduct.productGroup)}”，历史痛点与评论归属已重算。`);
+    },
+    onError: error => {
+      setFeedback(getRequestErrorMessage(error, "改组失败，请稍后重试。"));
     },
   });
 
@@ -103,19 +174,29 @@ export function ProductsPage(): ReactElement {
       return apiDelete<{ id: number; deleted: true }>(`/shops/${selectedShopId}/products/${productId}`);
     },
     onSuccess: async deletedId => {
-      await queryClient.invalidateQueries({ queryKey: ["products", selectedShopId] });
+      await invalidateProductQueries();
+      await invalidateAnalyticsQueries();
       if (editingId === deletedId.id) {
-        setEditingId(null);
-        setForm(EMPTY_PRODUCT_FORM);
+        resetEditor();
       }
       setFeedback("商品已删除。");
     },
     onError: error => {
-      setFeedback(getErrorMessage(error));
+      setFeedback(getRequestErrorMessage(error, "删除失败，请稍后重试。"));
     },
   });
 
   const products = useMemo(() => productsQuery.data ?? [], [productsQuery.data]);
+  const productGroups = useMemo(() => productGroupsQuery.data ?? [], [productGroupsQuery.data]);
+  const editingProduct = useMemo(
+    () => (editingId === null ? null : products.find(product => product.id === editingId) ?? null),
+    [editingId, products],
+  );
+  const canSubmitRegroup =
+    editingProduct !== null &&
+    regroupTargetId !== null &&
+    regroupTargetId !== editingProduct.productGroupId &&
+    !regroupMutation.isPending;
 
   if (!selectedShop) {
     return (
@@ -133,7 +214,7 @@ export function ProductsPage(): ReactElement {
         <section className="surface panel-card">
           <span className="eyebrow">Product Form</span>
           <h3>{editingId ? "编辑商品" : `为 ${selectedShop.name} 添加商品`}</h3>
-          <p>通常上传评论后会自动登记商品，你也可以提前手动补充商品别名、分类和备注。</p>
+          <p>通常上传评论后会自动登记商品；进入编辑后，你也可以查看短名称、当前商品组，并手动改到已有组。</p>
 
           <div className="form-grid">
             <label className="field-group">
@@ -195,6 +276,58 @@ export function ProductsPage(): ReactElement {
               <span>启用该商品参与后续分析</span>
             </label>
 
+            {editingProduct ? (
+              <div className="field-span-2 stack-sm">
+                <div className="row-heading row-heading--spread">
+                  <strong>当前归组信息</strong>
+                  <span className="pill pill--accent">{getClassificationSourceLabel(editingProduct)}</span>
+                </div>
+                <p>短名称：{editingProduct.shortName || "未提取"}</p>
+                <p>当前商品组：{getProductGroupLabel(editingProduct.productGroup)}</p>
+                <p>{editingProduct.classificationLocked ? "该商品已锁定到人工指定分组。" : "该商品会随原始名称变化自动重新匹配商品组。"}</p>
+
+                <label className="field-group">
+                  <span>改到已有商品组</span>
+                  <select
+                    className="input"
+                    value={regroupTargetId ?? ""}
+                    onChange={event => setRegroupTargetId(event.target.value ? Number(event.target.value) : null)}
+                  >
+                    <option value="">请选择商品组</option>
+                    {productGroups.map(group => (
+                      <option key={group.id} value={group.id}>
+                        {getProductGroupLabel(group)} · {group.productCount} 个商品 · {group.painPointCount} 个痛点
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="button-row button-row--tight">
+                  <button
+                    className="button button--ghost"
+                    type="button"
+                    disabled={!canSubmitRegroup}
+                    onClick={() => {
+                      if (regroupTargetId === null) {
+                        return;
+                      }
+
+                      setFeedback("");
+                      void regroupMutation.mutateAsync({ productGroupId: regroupTargetId });
+                    }}
+                  >
+                    {regroupMutation.isPending ? "改组中..." : "应用归组"}
+                  </button>
+                  <span>{productGroups.length > 0 ? "改组后会立即重算受影响商品组的历史痛点。" : "当前还没有可选商品组。"}</span>
+                </div>
+              </div>
+            ) : (
+              <div className="field-span-2 stack-sm">
+                <strong>自动归组说明</strong>
+                <p>新商品保存后会根据原始名称自动提取短名称，并复用店铺内已有商品组；匹配不到时会自动建组。</p>
+              </div>
+            )}
+
             <div className="button-row field-span-2">
               <button
                 className="button"
@@ -211,8 +344,7 @@ export function ProductsPage(): ReactElement {
                 className="button button--ghost"
                 type="button"
                 onClick={() => {
-                  setEditingId(null);
-                  setForm(EMPTY_PRODUCT_FORM);
+                  resetEditor();
                   setFeedback("");
                 }}
               >
@@ -231,42 +363,32 @@ export function ProductsPage(): ReactElement {
             {products.length > 0 ? (
               products.map(product => (
                 <article key={product.id} className="list-row list-row--card list-row--tall">
-                  <div>
-                    <div className="row-heading">
-                      <strong>{product.displayName || product.rawName || product.doudianProductId}</strong>
-                      <span className={product.enabled ? "pill pill--success" : "pill"}>{product.enabled ? "启用" : "停用"}</span>
+                  <div className="stack-sm">
+                    <div className="row-heading row-heading--spread">
+                      <strong>{getProductDisplayLabel(product)}</strong>
+                      <div className="button-row button-row--tight">
+                        <span className={product.enabled ? "pill pill--success" : "pill"}>{product.enabled ? "启用" : "停用"}</span>
+                        <span className="pill pill--accent">{getClassificationSourceLabel(product)}</span>
+                      </div>
                     </div>
                     <p>商品 ID：{product.doudianProductId}</p>
+                    <p>短名称：{product.shortName || "未提取"}</p>
+                    <p>商品组：{getProductGroupLabel(product.productGroup)}</p>
                     <p>分类：{product.category || "未分类"}</p>
                     <p>最近评论：{formatTimestamp(product.latestReviewTime)}</p>
                     <p>痛点数：{product.painPointCount}</p>
                   </div>
 
                   <div className="button-row button-row--tight">
-                    <button
-                      className="button button--ghost"
-                      type="button"
-                      onClick={() => {
-                        setEditingId(product.id);
-                        setForm({
-                          doudianProductId: product.doudianProductId,
-                          displayName: product.displayName ?? "",
-                          rawName: product.rawName ?? "",
-                          category: product.category ?? "",
-                          notes: product.notes ?? "",
-                          enabled: product.enabled,
-                        });
-                        setFeedback("");
-                      }}
-                    >
-                      编辑
+                    <button className="button button--ghost" type="button" onClick={() => beginEditing(product)}>
+                      {editingId === product.id ? "正在编辑" : "编辑 / 改组"}
                     </button>
                     <button
                       className="button button--ghost"
                       type="button"
                       disabled={deleteMutation.isPending}
                       onClick={() => {
-                        const shouldDelete = window.confirm(`确认删除商品「${product.displayName || product.doudianProductId}」吗？`);
+                        const shouldDelete = window.confirm(`确认删除商品「${getProductDisplayLabel(product)}」吗？`);
                         if (!shouldDelete) {
                           return;
                         }

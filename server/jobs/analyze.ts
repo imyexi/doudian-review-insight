@@ -1,60 +1,10 @@
 import { and, eq, sql } from "drizzle-orm";
-import type { AnalysisMode, PainPointCategory, PainPointSource } from "@shared/types";
 import { db } from "../db/client";
-import {
-  painPointEvidence,
-  painPointSpecStats,
-  painPoints,
-  products,
-  reviews,
-  uploads,
-  type ReviewRow,
-} from "../db/schema";
-import { getAnalysisRuntimeSettings } from "../utils/analysisSettings";
-import { extractPainPointsWithLlm } from "./llm";
+import { products, reviews, uploads } from "../db/schema";
+import { analyzeReviews } from "../services/painPointAggregation";
+import { resolveProductGrouping } from "../services/productGrouping";
 import { parseExcel } from "./parseExcel";
-import { findRuleMatches } from "./rules";
-
-interface Candidate {
-  canonicalLabel: string;
-  category: PainPointCategory;
-  excerpt: string;
-  source: PainPointSource;
-}
-
-function normalizeLabel(value: string): string {
-  return value.replace(/\s+/g, "").trim().toLowerCase();
-}
-
-function shouldUseLlm(mode: AnalysisMode): boolean {
-  return mode === "llm_only" || mode === "hybrid";
-}
-
-function getReviewText(review: Pick<ReviewRow, "content" | "appendContent">): string {
-  return [review.content, review.appendContent].filter(Boolean).join("\n").trim();
-}
-
-function getCandidatesForReview(
-  review: Pick<ReviewRow, "id" | "content" | "appendContent">,
-  mode: AnalysisMode,
-  llmCandidates: Record<number, Candidate[]>,
-): Candidate[] {
-  const text = getReviewText(review);
-  if (!text) {
-    return [];
-  }
-
-  if (mode === "rules_only") {
-    return findRuleMatches(text);
-  }
-
-  if (mode === "llm_only") {
-    return llmCandidates[review.id] ?? [];
-  }
-
-  const ruleCandidates = findRuleMatches(text);
-  return ruleCandidates.length > 0 ? ruleCandidates : llmCandidates[review.id] ?? [];
-}
+import { analyzeQueue } from "./queue";
 
 async function updateUploadState(
   uploadId: number,
@@ -63,41 +13,75 @@ async function updateUploadState(
   await db.update(uploads).set(values).where(eq(uploads.id, uploadId));
 }
 
-async function ensureProduct(shopId: number, row: ReturnType<typeof parseExcel>[number]): Promise<number> {
+function isUploadAnalysisCanceled(uploadId: number): boolean {
+  return analyzeQueue.isCanceled(String(uploadId));
+}
+
+async function ensureProduct(
+  shopId: number,
+  row: ReturnType<typeof parseExcel>[number],
+): Promise<{ productRefId: number; productGroupId: number | null }> {
   const [existing] = await db
-    .select({ id: products.id })
+    .select()
     .from(products)
     .where(and(eq(products.shopId, shopId), eq(products.doudianProductId, row.productId)))
     .limit(1);
 
+  const grouping = await resolveProductGrouping({
+    shopId,
+    doudianProductId: row.productId,
+    displayName: existing?.displayName ?? null,
+    rawName: row.productName,
+    shortNameOverride: existing?.classificationLocked ? existing.shortName : null,
+  });
+
   if (existing) {
+    const nextProductGroupId = existing.classificationLocked ? existing.productGroupId : grouping.productGroup.id;
+    const nextShortName = existing.classificationLocked ? existing.shortName : grouping.shortName;
+    const nextClassificationSource = existing.classificationLocked ? existing.classificationSource : grouping.classificationSource;
+
     await db
       .update(products)
       .set({
+        productGroupId: nextProductGroupId,
         rawName: row.productName,
+        shortName: nextShortName,
+        classificationSource: nextClassificationSource,
         updatedAt: Math.floor(Date.now() / 1000),
       })
       .where(eq(products.id, existing.id));
-    return existing.id;
+
+    return {
+      productRefId: existing.id,
+      productGroupId: nextProductGroupId,
+    };
   }
 
   const [created] = await db
     .insert(products)
     .values({
       shopId,
+      productGroupId: grouping.productGroup.id,
       doudianProductId: row.productId,
       rawName: row.productName,
+      shortName: grouping.shortName,
+      classificationSource: grouping.classificationSource,
+      classificationLocked: false,
       updatedAt: Math.floor(Date.now() / 1000),
     })
-    .returning({ id: products.id });
+    .returning({ id: products.id, productGroupId: products.productGroupId });
 
-  return created.id;
+  return {
+    productRefId: created.id,
+    productGroupId: created.productGroupId,
+  };
 }
 
 async function insertReview(
   uploadId: number,
   shopId: number,
   productRefId: number,
+  productGroupId: number | null,
   row: ReturnType<typeof parseExcel>[number],
 ): Promise<number | null> {
   const [created] = await db
@@ -105,6 +89,7 @@ async function insertReview(
     .values({
       shopId,
       productRefId,
+      productGroupId,
       uploadId,
       doudianOrderId: row.orderId,
       doudianProductId: row.productId,
@@ -126,92 +111,10 @@ async function insertReview(
   return created?.id ?? null;
 }
 
-async function upsertPainPoint(
-  review: Pick<ReviewRow, "id" | "shopId" | "productRefId" | "productSpec" | "reviewTime">,
-  candidate: Candidate,
-): Promise<void> {
-  const normalizedLabel = normalizeLabel(candidate.canonicalLabel);
-
-  const existingRows = await db
-    .select()
-    .from(painPoints)
-    .where(
-      and(
-        eq(painPoints.shopId, review.shopId),
-        review.productRefId === null
-          ? sql`${painPoints.productRefId} is null`
-          : eq(painPoints.productRefId, review.productRefId),
-      ),
-    );
-
-  const existing = existingRows.find(item => normalizeLabel(item.canonicalLabel) === normalizedLabel);
-
-  let painPointId: number;
-
-  if (existing) {
-    painPointId = existing.id;
-    await db
-      .update(painPoints)
-      .set({
-        lastSeenAt: Math.max(existing.lastSeenAt, review.reviewTime),
-        firstSeenAt: Math.min(existing.firstSeenAt, review.reviewTime),
-        occurrenceCount: existing.occurrenceCount + 1,
-        source: existing.source === candidate.source ? existing.source : "merged",
-      })
-      .where(eq(painPoints.id, existing.id));
-  } else {
-    const [created] = await db
-      .insert(painPoints)
-      .values({
-        shopId: review.shopId,
-        productRefId: review.productRefId,
-        canonicalLabel: candidate.canonicalLabel,
-        category: candidate.category,
-        firstSeenAt: review.reviewTime,
-        lastSeenAt: review.reviewTime,
-        occurrenceCount: 1,
-        source: candidate.source,
-      })
-      .returning({ id: painPoints.id });
-
-    painPointId = created.id;
-  }
-
-  await db
-    .insert(painPointEvidence)
-    .values({
-      painPointId,
-      reviewId: review.id,
-      excerpt: candidate.excerpt,
-    })
-    .onConflictDoNothing();
-
-  if (review.productSpec) {
-    const [stat] = await db
-      .select()
-      .from(painPointSpecStats)
-      .where(and(eq(painPointSpecStats.painPointId, painPointId), eq(painPointSpecStats.productSpec, review.productSpec)))
-      .limit(1);
-
-    if (stat) {
-      await db
-        .update(painPointSpecStats)
-        .set({ count: stat.count + 1 })
-        .where(eq(painPointSpecStats.id, stat.id));
-    } else {
-      await db.insert(painPointSpecStats).values({
-        painPointId,
-        productSpec: review.productSpec,
-        count: 1,
-      });
-    }
-  }
-}
-
 export async function analyzeUpload(uploadId: number): Promise<void> {
   const [upload] = await db.select().from(uploads).where(eq(uploads.id, uploadId)).limit(1);
-  if (!upload) {
-    throw new Error(`Upload ${uploadId} not found`);
+  if (!upload || isUploadAnalysisCanceled(uploadId)) {
+    return;
   }
 
   try {
@@ -221,6 +124,10 @@ export async function analyzeUpload(uploadId: number): Promise<void> {
     });
 
     const rows = parseExcel(upload.storedPath);
+    if (isUploadAnalysisCanceled(uploadId)) {
+      return;
+    }
+
     await updateUploadState(uploadId, {
       rowCount: rows.length,
       progressTotal: rows.length,
@@ -229,9 +136,13 @@ export async function analyzeUpload(uploadId: number): Promise<void> {
     const insertedReviewIds: number[] = [];
 
     for (let index = 0; index < rows.length; index += 1) {
+      if (isUploadAnalysisCanceled(uploadId)) {
+        return;
+      }
+
       const row = rows[index];
-      const productRefId = await ensureProduct(upload.shopId, row);
-      const reviewId = await insertReview(uploadId, upload.shopId, productRefId, row);
+      const productMatch = await ensureProduct(upload.shopId, row);
+      const reviewId = await insertReview(uploadId, upload.shopId, productMatch.productRefId, productMatch.productGroupId, row);
 
       if (reviewId) {
         insertedReviewIds.push(reviewId);
@@ -242,33 +153,29 @@ export async function analyzeUpload(uploadId: number): Promise<void> {
       });
     }
 
+    if (isUploadAnalysisCanceled(uploadId)) {
+      return;
+    }
+
     await updateUploadState(uploadId, {
       status: "analyzing",
     });
 
     const insertedReviews = insertedReviewIds.length
-      ? await db.select().from(reviews).where(sql`${reviews.id} in (${sql.join(insertedReviewIds.map(id => sql`${id}`), sql`, `)})`)
+      ? await db
+          .select()
+          .from(reviews)
+          .where(sql`${reviews.id} in (${sql.join(insertedReviewIds.map(id => sql`${id}`), sql`, `)})`)
       : [];
 
-    const analysisSettings = await getAnalysisRuntimeSettings();
-    const llmCandidates = shouldUseLlm(analysisSettings.analysisMode)
-      ? await extractPainPointsWithLlm(
-          insertedReviews
-            .filter(review => getReviewText(review).length > 0 && (analysisSettings.analysisMode === "llm_only" || review.rating === null || review.rating <= 3))
-            .map(review => ({
-              reviewId: review.id,
-              content: getReviewText(review),
-            })),
-          analysisSettings,
-        )
-      : {};
+    if (isUploadAnalysisCanceled(uploadId)) {
+      return;
+    }
 
-    for (const review of insertedReviews) {
-      const combinedCandidates = getCandidatesForReview(review, analysisSettings.analysisMode, llmCandidates);
+    await analyzeReviews(insertedReviews);
 
-      for (const candidate of combinedCandidates) {
-        await upsertPainPoint(review, candidate);
-      }
+    if (isUploadAnalysisCanceled(uploadId)) {
+      return;
     }
 
     await updateUploadState(uploadId, {
@@ -276,6 +183,15 @@ export async function analyzeUpload(uploadId: number): Promise<void> {
       finishedAt: Math.floor(Date.now() / 1000),
     });
   } catch (error) {
+    if (isUploadAnalysisCanceled(uploadId)) {
+      return;
+    }
+
+    const [existingUpload] = await db.select({ id: uploads.id }).from(uploads).where(eq(uploads.id, uploadId)).limit(1);
+    if (!existingUpload) {
+      return;
+    }
+
     await updateUploadState(uploadId, {
       status: "failed",
       error: error instanceof Error ? error.message : String(error),

@@ -46,6 +46,15 @@ export function PainPointsPage(): ReactElement {
     enabled: selectedShopId !== null,
   });
 
+  const products = useMemo(() => productsQuery.data ?? [], [productsQuery.data]);
+  const selectedProductGroupId = useMemo(() => {
+    if (selectedProductId === "all") {
+      return undefined;
+    }
+
+    return products.find(product => product.id === selectedProductId)?.productGroupId ?? undefined;
+  }, [products, selectedProductId]);
+
   const statsQuery = useQuery({
     queryKey: ["stats", selectedShopId],
     queryFn: () => apiGet<OverviewStats>("/stats/overview", { query: { shopId: selectedShopId ?? undefined } }),
@@ -53,13 +62,13 @@ export function PainPointsPage(): ReactElement {
   });
 
   const painPointsQuery = useQuery({
-    queryKey: ["pain-points", selectedShopId, mode, selectedProductId, search, selectedCategories],
+    queryKey: ["pain-points", selectedShopId, mode, selectedProductId, selectedProductGroupId, search, selectedCategories],
     queryFn: () =>
       apiGet<PainPoint[]>("/pain-points", {
         query: {
           shopId: selectedShopId ?? undefined,
           mode,
-          productRefId: selectedProductId === "all" ? undefined : selectedProductId,
+          productGroupId: selectedProductGroupId,
           category: selectedCategories,
           q: search || undefined,
         },
@@ -68,18 +77,27 @@ export function PainPointsPage(): ReactElement {
   });
 
   const evidenceQuery = useQuery({
-    queryKey: ["pain-point-evidence", selectedPainPointId],
-    queryFn: () => apiGet<PainPointEvidence[]>(`/pain-points/${selectedPainPointId}/evidence`),
-    enabled: selectedPainPointId !== null,
+    queryKey: ["pain-point-evidence", selectedShopId, selectedPainPointId],
+    queryFn: () =>
+      apiGet<PainPointEvidence[]>(`/pain-points/${selectedPainPointId}/evidence`, {
+        query: {
+          shopId: selectedShopId ?? undefined,
+        },
+      }),
+    enabled: selectedShopId !== null && selectedPainPointId !== null,
   });
 
   const specStatsQuery = useQuery({
-    queryKey: ["pain-point-spec-stats", selectedPainPointId],
-    queryFn: () => apiGet<SpecStat[]>(`/pain-points/${selectedPainPointId}/spec-stats`),
-    enabled: selectedPainPointId !== null,
+    queryKey: ["pain-point-spec-stats", selectedShopId, selectedPainPointId],
+    queryFn: () =>
+      apiGet<SpecStat[]>(`/pain-points/${selectedPainPointId}/spec-stats`, {
+        query: {
+          shopId: selectedShopId ?? undefined,
+        },
+      }),
+    enabled: selectedShopId !== null && selectedPainPointId !== null,
   });
 
-  const products = useMemo(() => productsQuery.data ?? [], [productsQuery.data]);
   const painPoints = useMemo(() => painPointsQuery.data ?? [], [painPointsQuery.data]);
   const selectedPainPoint = useMemo(
     () => painPoints.find(item => item.id === selectedPainPointId) ?? painPoints[0] ?? null,

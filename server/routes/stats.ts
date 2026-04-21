@@ -1,8 +1,8 @@
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 import { Router } from "express";
-import type { PainPointCategory, TopPainPointOverview } from "@shared/types";
+import type { PainPointCategory } from "@shared/types";
 import { db } from "../db/client";
-import { painPoints, products, reviews } from "../db/schema";
+import { painPoints, productGroups, reviews } from "../db/schema";
 import { sendError, sendSuccess } from "../utils/http";
 
 const SEVEN_DAYS_IN_SECONDS = 7 * 24 * 60 * 60;
@@ -24,7 +24,13 @@ interface TopPainPointRow {
   productLabel: string | null;
 }
 
-interface TopPainPointAccumulator extends TopPainPointOverview {
+interface TopPainPointAccumulator {
+  canonicalLabel: string;
+  category: PainPointCategory;
+  occurrenceCount: number;
+  lastSeenAt: number;
+  relatedProducts: string[];
+  extraProductCount: number;
   allProducts: string[];
 }
 
@@ -40,12 +46,10 @@ function createTrendWindow(): string[] {
 }
 
 function normalizeTrendRows(rows: TrendRow[]): TrendRow[] {
-  const countsByDate = rows.reduce((map, row) => {
-    return {
-      ...map,
-      [row.date]: row.count,
-    };
-  }, {} as Record<string, number>);
+  const countsByDate = rows.reduce((map, row) => ({
+    ...map,
+    [row.date]: row.count,
+  }), {} as Record<string, number>);
 
   return createTrendWindow().map(date => ({
     date,
@@ -57,7 +61,7 @@ function getProductLabel(row: TopPainPointRow): string {
   return row.productLabel ?? STORE_LEVEL_PRODUCT_LABEL;
 }
 
-function normalizeTopPainPoints(rows: TopPainPointRow[]): TopPainPointOverview[] {
+function normalizeTopPainPoints(rows: TopPainPointRow[]) {
   const aggregated = rows.reduce<Record<string, TopPainPointAccumulator>>((current, row) => {
     const key = `${row.category}::${row.canonicalLabel}`;
     const existing = current[key];
@@ -138,10 +142,10 @@ statsRouter.get("/overview", async (request, response) => {
         category: sql<PainPointCategory>`${painPoints.category}`,
         occurrenceCount: painPoints.occurrenceCount,
         lastSeenAt: painPoints.lastSeenAt,
-        productLabel: sql<string | null>`coalesce(${products.displayName}, ${products.rawName}, ${products.doudianProductId})`,
+        productLabel: sql<string | null>`coalesce(${productGroups.name}, ${productGroups.shortName})`,
       })
       .from(painPoints)
-      .leftJoin(products, eq(products.id, painPoints.productRefId))
+      .leftJoin(productGroups, eq(productGroups.id, painPoints.productGroupId))
       .where(and(eq(painPoints.shopId, shopId), eq(painPoints.status, "active"))),
   ]);
 

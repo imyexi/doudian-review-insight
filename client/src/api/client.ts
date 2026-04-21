@@ -19,6 +19,14 @@ export class ApiRequestError extends Error {
   }
 }
 
+export function getRequestErrorMessage(error: unknown, fallbackMessage: string): string {
+  if (error instanceof ApiRequestError) {
+    return error.message;
+  }
+
+  return fallbackMessage;
+}
+
 function buildUrl(path: string, query?: ApiRequestOptions["query"]): string {
   const searchParams = new URLSearchParams();
 

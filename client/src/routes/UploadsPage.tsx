@@ -31,6 +31,22 @@ export function UploadsPage(): ReactElement {
     },
   });
 
+  async function invalidateShopQueries(): Promise<void> {
+    if (selectedShopId === null) {
+      return;
+    }
+
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["uploads", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["products", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["product-groups", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["pain-points", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["pain-points", "review-filters", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["reviews", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["stats", selectedShopId] }),
+    ]);
+  }
+
   const uploadMutation = useMutation({
     mutationFn: async () => {
       if (!selectedShopId) {
@@ -47,7 +63,7 @@ export function UploadsPage(): ReactElement {
       return apiPost<{ uploadId: number }, FormData>("/uploads", formData);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["uploads", selectedShopId] });
+      await invalidateShopQueries();
       setSelectedFile(null);
       setFeedback("文件已加入处理队列，下面会持续刷新进度。");
     },
@@ -57,9 +73,17 @@ export function UploadsPage(): ReactElement {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (uploadId: number) => apiDelete<{ id: number; deleted: true }>(`/uploads/${uploadId}`),
+    mutationFn: (uploadId: number) => {
+      if (!selectedShopId) {
+        throw new Error("请先选择店铺");
+      }
+
+      return apiDelete<{ id: number; deleted: true }>(`/uploads/${uploadId}`, {
+        query: { shopId: selectedShopId },
+      });
+    },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["uploads", selectedShopId] });
+      await invalidateShopQueries();
       setFeedback("上传批次已删除。");
     },
     onError: error => {

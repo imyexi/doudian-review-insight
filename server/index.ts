@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
-import express from "express";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import express from "express";
 import { requireAuth } from "./auth";
 import { initializeDatabase } from "./db/client";
 import { env } from "./env";
@@ -58,9 +59,13 @@ async function startServer(): Promise<void> {
   });
 }
 
-startServer().catch(error => {
-  logger.error({ error }, "server failed to start");
-  process.exit(1);
-});
+const isMainModule = Boolean(process.argv[1]) && pathToFileURL(process.argv[1]).href === import.meta.url;
 
-export { createApp };
+if (isMainModule) {
+  startServer().catch(error => {
+    logger.error({ error }, "server failed to start");
+    process.exit(1);
+  });
+}
+
+export { createApp, startServer };

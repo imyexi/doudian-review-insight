@@ -22,6 +22,7 @@ export const painPointSourceSchema = z.enum(["rule", "llm", "merged"]);
 export const painPointModeSchema = z.enum(["historical", "new7d"]);
 export const painPointStatusSchema = z.enum(["active", "archived"]);
 export const analysisModeSchema = z.enum(["rules_only", "llm_only", "hybrid"]);
+export const productClassificationSourceSchema = z.enum(["auto", "manual"]);
 export const reviewLevelSchema = z.enum(["好评", "中评", "差评"]);
 
 export const shopSchema = z.object({
@@ -38,26 +39,47 @@ export const shopInputSchema = z.object({
   description: z.string().trim().max(500).optional().or(z.literal("")),
 });
 
+export const productGroupSchema = z.object({
+  id: z.number().int().positive(),
+  shopId: z.number().int().positive(),
+  name: z.string().min(1),
+  shortName: z.string().min(1),
+  createdAt: z.number().int().nonnegative(),
+  updatedAt: z.number().int().nonnegative(),
+});
+
 export const productSchema = z.object({
   id: z.number().int().positive(),
   shopId: z.number().int().positive(),
+  productGroupId: z.number().int().positive().nullable(),
   doudianProductId: z.string().min(1),
   displayName: z.string().nullable(),
   rawName: z.string().nullable(),
+  shortName: z.string().nullable(),
   category: z.string().nullable(),
   notes: z.string().nullable(),
+  classificationSource: productClassificationSourceSchema,
+  classificationLocked: z.boolean(),
   enabled: z.boolean(),
   createdAt: z.number().int().nonnegative(),
   updatedAt: z.number().int().nonnegative(),
+  latestReviewTime: z.number().int().nonnegative().nullable(),
+  painPointCount: z.number().int().nonnegative(),
+  productGroup: productGroupSchema.nullable().optional(),
 });
 
 export const productInputSchema = z.object({
   doudianProductId: z.string().trim().min(1, "请输入商品 ID").max(120),
   displayName: z.string().trim().max(120).optional().or(z.literal("")),
   rawName: z.string().trim().max(500).optional().or(z.literal("")),
+  shortName: z.string().trim().max(120).optional().or(z.literal("")),
   category: z.string().trim().max(120).optional().or(z.literal("")),
   notes: z.string().trim().max(1000).optional().or(z.literal("")),
   enabled: z.boolean().optional(),
+});
+
+export const productRegroupSchema = z.object({
+  productGroupId: z.number().int().positive(),
 });
 
 export const uploadSchema = z.object({
@@ -80,6 +102,7 @@ export const reviewSchema = z.object({
   id: z.number().int().positive(),
   shopId: z.number().int().positive(),
   productRefId: z.number().int().positive().nullable(),
+  productGroupId: z.number().int().positive().nullable(),
   uploadId: z.number().int().positive().nullable(),
   doudianOrderId: z.string().nullable(),
   doudianProductId: z.string().min(1),
@@ -95,6 +118,7 @@ export const reviewSchema = z.object({
   merchantReplied: z.boolean(),
   replyContent: z.string().nullable(),
   createdAt: z.number().int().nonnegative(),
+  productGroup: productGroupSchema.nullable().optional(),
 });
 
 export const painPointEvidenceSchema = z.object({
@@ -110,6 +134,7 @@ export const painPointSchema = z.object({
   id: z.number().int().positive(),
   shopId: z.number().int().positive(),
   productRefId: z.number().int().positive().nullable(),
+  productGroupId: z.number().int().positive().nullable(),
   canonicalLabel: z.string().min(1),
   category: painPointCategorySchema,
   description: z.string().nullable(),
@@ -119,6 +144,7 @@ export const painPointSchema = z.object({
   source: painPointSourceSchema,
   status: painPointStatusSchema,
   createdAt: z.number().int().nonnegative(),
+  productGroup: productGroupSchema.nullable().optional(),
   topEvidence: z.array(painPointEvidenceSchema).optional(),
 });
 
@@ -130,6 +156,7 @@ export const specStatSchema = z.object({
 export const reviewListQuerySchema = z.object({
   shopId: z.coerce.number().int().positive(),
   productRefId: z.coerce.number().int().positive().optional(),
+  productGroupId: z.coerce.number().int().positive().optional(),
   painPointId: z.coerce.number().int().positive().optional(),
   rating: z.coerce.number().int().min(1).max(5).optional(),
   spec: z.string().trim().optional(),
@@ -141,6 +168,7 @@ export const reviewListQuerySchema = z.object({
 export const painPointListQuerySchema = z.object({
   shopId: z.coerce.number().int().positive(),
   productRefId: z.coerce.number().int().positive().optional(),
+  productGroupId: z.coerce.number().int().positive().optional(),
   mode: painPointModeSchema.default("historical"),
   category: z.array(painPointCategorySchema).optional(),
   q: z.string().trim().optional(),
@@ -227,9 +255,11 @@ export type PainPointSource = z.infer<typeof painPointSourceSchema>;
 export type PainPointMode = z.infer<typeof painPointModeSchema>;
 export type PainPointStatus = z.infer<typeof painPointStatusSchema>;
 export type AnalysisMode = z.infer<typeof analysisModeSchema>;
+export type ProductClassificationSource = z.infer<typeof productClassificationSourceSchema>;
 export type ReviewLevel = z.infer<typeof reviewLevelSchema>;
 export type Shop = z.infer<typeof shopSchema>;
 export type ShopInput = z.infer<typeof shopInputSchema>;
+export type ProductGroup = z.infer<typeof productGroupSchema>;
 export type Product = z.infer<typeof productSchema>;
 export type ProductInput = z.infer<typeof productInputSchema>;
 export type Upload = z.infer<typeof uploadSchema>;
@@ -243,6 +273,7 @@ export type TopPainPointOverview = z.infer<typeof topPainPointOverviewSchema>;
 export type OverviewStats = z.infer<typeof overviewStatsSchema>;
 export type AnalysisSettings = z.infer<typeof analysisSettingsSchema>;
 export type AnalysisSettingsUpdate = z.infer<typeof analysisSettingsUpdateSchema>;
+export type ProductRegroupInput = z.infer<typeof productRegroupSchema>;
 export type AuthLoginInput = z.infer<typeof authLoginSchema>;
 
 export interface ApiErrorShape {

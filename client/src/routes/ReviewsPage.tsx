@@ -20,6 +20,10 @@ function getProductDisplayLabel(product: Product): string {
 }
 
 function getPainPointOptionLabel(painPoint: PainPoint, products: Product[]): string {
+  if (painPoint.productGroup) {
+    return `${painPoint.canonicalLabel} · ${painPoint.productGroup.name}`;
+  }
+
   if (painPoint.productRefId === null) {
     return `${painPoint.canonicalLabel} · 店铺级`;
   }
@@ -45,20 +49,30 @@ export function ReviewsPage(): ReactElement {
     enabled: selectedShopId !== null,
   });
 
+  const products = useMemo(() => productsQuery.data ?? [], [productsQuery.data]);
+  const selectedProductGroupId = useMemo(() => {
+    if (selectedProductId === "all") {
+      return undefined;
+    }
+
+    return products.find(product => product.id === selectedProductId)?.productGroupId ?? undefined;
+  }, [products, selectedProductId]);
+
   const painPointsQuery = useQuery({
-    queryKey: ["pain-points", "review-filters", selectedShopId, selectedProductId],
-    queryFn: () => apiGet<PainPoint[]>("/pain-points", {
-      query: {
-        shopId: selectedShopId ?? undefined,
-        mode: "historical",
-        productRefId: selectedProductId === "all" ? undefined : selectedProductId,
-      },
-    }),
+    queryKey: ["pain-points", "review-filters", selectedShopId, selectedProductId, selectedProductGroupId],
+    queryFn: () =>
+      apiGet<PainPoint[]>("/pain-points", {
+        query: {
+          shopId: selectedShopId ?? undefined,
+          mode: "historical",
+          productGroupId: selectedProductGroupId,
+        },
+      }),
     enabled: selectedShopId !== null,
   });
 
   const reviewsQuery = useQuery({
-    queryKey: ["reviews", selectedShopId, page, search, spec, selectedProductId, selectedPainPointId, selectedRating],
+    queryKey: ["reviews", selectedShopId, page, search, spec, selectedProductId, selectedProductGroupId, selectedPainPointId, selectedRating],
     queryFn: () =>
       apiGet<ReviewListResponse>("/reviews", {
         query: {
@@ -67,7 +81,7 @@ export function ReviewsPage(): ReactElement {
           pageSize: PAGE_SIZE,
           q: search || undefined,
           spec: spec || undefined,
-          productRefId: selectedProductId === "all" ? undefined : selectedProductId,
+          productGroupId: selectedProductGroupId,
           painPointId: selectedPainPointId ?? undefined,
           rating: selectedRating === "all" ? undefined : selectedRating,
         },
@@ -75,7 +89,6 @@ export function ReviewsPage(): ReactElement {
     enabled: selectedShopId !== null,
   });
 
-  const products = useMemo(() => productsQuery.data ?? [], [productsQuery.data]);
   const painPoints = useMemo(() => painPointsQuery.data ?? [], [painPointsQuery.data]);
   const reviewRows = useMemo(() => reviewsQuery.data?.items ?? [], [reviewsQuery.data]);
   const total = reviewsQuery.data?.total ?? 0;
@@ -146,9 +159,9 @@ export function ReviewsPage(): ReactElement {
 
         <div className="filter-grid filter-grid--three">
           <label className="field-group">
-            <span>商品</span>
+            <span>商品组</span>
             <select className="input" value={selectedProductId === "all" ? "" : selectedProductId} onChange={handleProductChange}>
-              <option value="">全部商品</option>
+              <option value="">全部商品组</option>
               {products.map(product => (
                 <option key={product.id} value={product.id}>
                   {product.displayName || product.rawName || product.doudianProductId}
@@ -160,7 +173,7 @@ export function ReviewsPage(): ReactElement {
           <label className="field-group">
             <span>痛点</span>
             <select className="input" value={selectedPainPointId ?? ""} onChange={handlePainPointChange}>
-              <option value="">{selectedProductId === "all" ? "全部痛点" : "该商品全部痛点"}</option>
+              <option value="">{selectedProductId === "all" ? "全部痛点" : "该商品组全部痛点"}</option>
               {painPoints.map(item => (
                 <option key={item.id} value={item.id}>
                   {getPainPointOptionLabel(item, products)}
@@ -268,7 +281,7 @@ export function ReviewsPage(): ReactElement {
           <div className="list-stack">
             <div className="list-row">
               <div>
-                <strong>选中商品</strong>
+                <strong>选中商品组</strong>
                 <p>
                   {selectedProductId === "all"
                     ? "全部商品"
@@ -286,7 +299,7 @@ export function ReviewsPage(): ReactElement {
                     ? getPainPointOptionLabel(selectedPainPoint, products)
                     : selectedProductId === "all"
                       ? "全部痛点"
-                      : "当前商品的全部痛点"}
+                      : "当前商品组的全部痛点"}
                 </p>
               </div>
             </div>

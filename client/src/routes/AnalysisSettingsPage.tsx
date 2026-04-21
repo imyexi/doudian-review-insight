@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AnalysisMode, AnalysisSettings, AnalysisSettingsUpdate } from "@shared/types";
-import { apiGet, apiPatch, ApiRequestError } from "@/api/client";
+import { apiGet, apiPatch, getRequestErrorMessage } from "@/api/client";
 import { formatTimestamp } from "@/lib/format";
 
 interface AnalysisSettingsFormState {
@@ -45,14 +45,6 @@ const EMPTY_FORM: AnalysisSettingsFormState = {
   llmBatchSize: "20",
   llmMaxConcurrency: "3",
 };
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof ApiRequestError) {
-    return error.message;
-  }
-
-  return "保存失败，请稍后重试。";
-}
 
 function toFormState(settings: AnalysisSettings): AnalysisSettingsFormState {
   return {
@@ -102,27 +94,24 @@ export function AnalysisSettingsPage(): ReactElement {
 
   const saveMutation = useMutation({
     mutationFn: (payload: AnalysisSettingsUpdate) => apiPatch<AnalysisSettings, AnalysisSettingsUpdate>("/settings/analysis", payload),
-    onSuccess: async nextSettings => {
+    onSuccess: nextSettings => {
       queryClient.setQueryData(["settings", "analysis"], nextSettings);
-      await queryClient.invalidateQueries({ queryKey: ["settings", "analysis"] });
       setForm(toFormState(nextSettings));
       setApiKeyDirty(false);
       setFeedback("分析设置已保存，后续上传任务会按新策略执行。");
     },
     onError: error => {
-      setFeedback(getErrorMessage(error));
+      setFeedback(getRequestErrorMessage(error, "保存失败，请稍后重试。"));
     },
   });
 
   const currentSettings = settingsQuery.data;
   const llmEnabled = requiresLlm(form.analysisMode);
-  const statusPillClassName = useMemo(() => {
-    if (form.analysisMode === "rules_only") {
-      return "pill";
-    }
-
-    return currentSettings?.hasApiKey ? "pill pill--success" : "pill pill--danger";
-  }, [currentSettings?.hasApiKey, form.analysisMode]);
+  const statusPillClassName = form.analysisMode === "rules_only"
+    ? "pill"
+    : currentSettings?.hasApiKey
+      ? "pill pill--success"
+      : "pill pill--danger";
 
   if (settingsQuery.isLoading) {
     return (
