@@ -11,6 +11,7 @@ interface AnalysisSettingsFormState {
   openaiModel: string;
   llmBatchSize: string;
   llmMaxConcurrency: string;
+  llmProductNameEnabled: boolean;
 }
 
 interface ModeOption {
@@ -32,8 +33,8 @@ const MODE_OPTIONS: ModeOption[] = [
   },
   {
     value: "hybrid",
-    label: "规则优先 + LLM 兜底",
-    description: "命中规则时直接使用规则结果，其余评论再交给 LLM。",
+    label: "规则 + LLM 合并",
+    description: "规则命中和 LLM 抽取会一起参与聚合，既保留高频问题，也尽量捞出更具体的补充意见。",
   },
 ];
 
@@ -44,6 +45,7 @@ const EMPTY_FORM: AnalysisSettingsFormState = {
   openaiModel: "",
   llmBatchSize: "20",
   llmMaxConcurrency: "3",
+  llmProductNameEnabled: true,
 };
 
 function toFormState(settings: AnalysisSettings): AnalysisSettingsFormState {
@@ -54,6 +56,7 @@ function toFormState(settings: AnalysisSettings): AnalysisSettingsFormState {
     openaiModel: settings.openaiModel,
     llmBatchSize: String(settings.llmBatchSize),
     llmMaxConcurrency: String(settings.llmMaxConcurrency),
+    llmProductNameEnabled: settings.llmProductNameEnabled,
   };
 }
 
@@ -64,6 +67,7 @@ function toPayload(form: AnalysisSettingsFormState, apiKeyDirty: boolean): Analy
     openaiModel: form.openaiModel,
     llmBatchSize: Number(form.llmBatchSize),
     llmMaxConcurrency: Number(form.llmMaxConcurrency),
+    llmProductNameEnabled: form.llmProductNameEnabled,
     ...(apiKeyDirty ? { openaiApiKey: form.openaiApiKey } : {}),
   };
 }
@@ -151,9 +155,9 @@ export function AnalysisSettingsPage(): ReactElement {
           <p>{currentSettings.maskedApiKey ? `当前仅显示遮罩：${currentSettings.maskedApiKey}` : "前端不会回显完整密钥。"}</p>
         </article>
         <article className="metric-card surface">
-          <span>批大小</span>
-          <strong>{currentSettings.llmBatchSize}</strong>
-          <p>每次送入 LLM 的评论数量上限。</p>
+          <span>商品名提取</span>
+          <strong>{currentSettings.llmProductNameEnabled ? "已开启" : "已关闭"}</strong>
+          <p>启用后，导入标题会先用大模型提取更通用的核心商品名。</p>
         </article>
         <article className="metric-card surface">
           <span>最近更新</span>
@@ -167,7 +171,7 @@ export function AnalysisSettingsPage(): ReactElement {
           <div className="stack-sm">
             <span className="eyebrow">Mode Switch</span>
             <h3>分析模式</h3>
-            <p>你可以明确指定只走规则、只走 LLM，或者继续使用规则优先 + LLM 兜底的混合模式。</p>
+            <p>你可以明确指定只走规则、只走 LLM，或者使用规则 + LLM 合并的模式，让高频问题和更具体的补充意见一起进入聚合。</p>
           </div>
 
           <div className="list-stack">
@@ -287,6 +291,19 @@ export function AnalysisSettingsPage(): ReactElement {
               />
             </label>
 
+            <label className="toggle-row field-span-2">
+              <input
+                checked={form.llmProductNameEnabled}
+                type="checkbox"
+                disabled={!llmEnabled}
+                onChange={event => {
+                  setForm(current => ({ ...current, llmProductNameEnabled: event.target.checked }));
+                  setFeedback("");
+                }}
+              />
+              <span>{llmEnabled ? "启用 LLM 商品名提取，导入标题会先抽取更通用的核心商品名" : "当前是纯规则模式，这个开关会暂时保留但不会生效"}</span>
+            </label>
+
             <div className="field-group field-span-2">
               <span>当前已保存 Key</span>
               <div className="row-heading row-heading--spread surface-muted evidence-card">
@@ -310,9 +327,10 @@ export function AnalysisSettingsPage(): ReactElement {
 
           <div className="surface-muted evidence-card stack-sm">
             <strong>保存说明</strong>
-            <p>1. 仅规则模式可以不填任何 LLM 参数。</p>
+            <p>1. 仅规则模式可以不填任何 LLM 参数；商品名提取偏好会保留，但当前不会生效。</p>
             <p>2. 仅 LLM / 混合模式下，后端会校验 Base URL、模型名与 API Key 是否齐全。</p>
-            <p>3. 修改后的设置会作用于之后的新上传任务，不会回溯重跑历史批次。</p>
+            <p>3. 开启商品名提取后，新上传商品会优先使用 LLM 提炼核心名称，再参与自动归组。</p>
+            <p>4. 修改后的设置会作用于之后的新上传任务，不会回溯重跑历史批次。</p>
           </div>
 
           <div className="button-row">

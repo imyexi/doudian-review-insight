@@ -15,6 +15,7 @@ import { statsRouter } from "./routes/stats";
 import { uploadsRouter } from "./routes/uploads";
 import { ensureAppDirectories } from "./utils/fs";
 import { logger } from "./utils/logger";
+import { recoverInterruptedUploads } from "./services/recoverInterruptedUploads";
 
 function createApp() {
   const app = express();
@@ -50,6 +51,7 @@ function createApp() {
 async function startServer(): Promise<void> {
   ensureAppDirectories();
   await initializeDatabase();
+  await recoverInterruptedUploads();
 
   const app = createApp();
   const server = createServer(app);

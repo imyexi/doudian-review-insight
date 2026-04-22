@@ -10,6 +10,7 @@ import { shops, uploads } from "../db/schema";
 import { analyzeQueue } from "../jobs/queue";
 import { env } from "../env";
 import { deleteUploadBatch } from "../services/deleteUploadBatch";
+import { recoverUploadBatch } from "../services/recoverUploadBatch";
 import { sendError, sendSuccess } from "../utils/http";
 import { normalizeUploadedFilename, serializeUpload } from "../utils/uploadFilename";
 
@@ -165,6 +166,23 @@ uploadsRouter.post("/", uploadMiddleware.single("file"), async (request, respons
     fs.rmSync(storedPath, { force: true });
     sendError(response, "UPLOAD_FAILED", error instanceof Error ? error.message : "上传失败，请稍后重试", 500);
   }
+});
+
+uploadsRouter.post("/:id/continue", async (request, response) => {
+  const uploadId = Number(request.params.id);
+  const shopId = parseShopId(request.query.shopId);
+  if (!Number.isInteger(uploadId) || uploadId <= 0 || !Number.isInteger(shopId) || shopId <= 0) {
+    sendError(response, "INVALID_ID", "上传 ID 或店铺 ID 无效", 400);
+    return;
+  }
+
+  const result = await recoverUploadBatch(shopId, uploadId);
+  if (!result.ok) {
+    sendError(response, result.code, result.message, result.status);
+    return;
+  }
+
+  sendSuccess(response, serializeUpload(result.upload));
 });
 
 uploadsRouter.delete("/:id", async (request, response) => {

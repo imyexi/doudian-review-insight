@@ -64,6 +64,18 @@ function getClassificationSourceLabel(product: Pick<Product, "classificationSour
   return "自动归组";
 }
 
+function getLlmExtractedName(product: Pick<Product, "llmExtractedName" | "shortName">): string | null {
+  if (!product.llmExtractedName) {
+    return null;
+  }
+
+  if (product.llmExtractedName === product.shortName) {
+    return null;
+  }
+
+  return product.llmExtractedName;
+}
+
 export function ProductsPage(): ReactElement {
   const queryClient = useQueryClient();
   const { selectedShop, selectedShopId } = useShop();
@@ -98,6 +110,7 @@ export function ProductsPage(): ReactElement {
 
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["pain-points", selectedShopId] }),
+      queryClient.invalidateQueries({ queryKey: ["pain-points", "noteworthy", selectedShopId] }),
       queryClient.invalidateQueries({ queryKey: ["pain-points", "review-filters", selectedShopId] }),
       queryClient.invalidateQueries({ queryKey: ["reviews", selectedShopId] }),
       queryClient.invalidateQueries({ queryKey: ["stats", selectedShopId] }),
@@ -283,6 +296,7 @@ export function ProductsPage(): ReactElement {
                   <span className="pill pill--accent">{getClassificationSourceLabel(editingProduct)}</span>
                 </div>
                 <p>短名称：{editingProduct.shortName || "未提取"}</p>
+                {getLlmExtractedName(editingProduct) ? <p>LLM 提取名：{getLlmExtractedName(editingProduct)}</p> : null}
                 <p>当前商品组：{getProductGroupLabel(editingProduct.productGroup)}</p>
                 <p>{editingProduct.classificationLocked ? "该商品已锁定到人工指定分组。" : "该商品会随原始名称变化自动重新匹配商品组。"}</p>
 
@@ -373,6 +387,7 @@ export function ProductsPage(): ReactElement {
                     </div>
                     <p>商品 ID：{product.doudianProductId}</p>
                     <p>短名称：{product.shortName || "未提取"}</p>
+                    {getLlmExtractedName(product) ? <p>LLM 提取名：{getLlmExtractedName(product)}</p> : null}
                     <p>商品组：{getProductGroupLabel(product.productGroup)}</p>
                     <p>分类：{product.category || "未分类"}</p>
                     <p>最近评论：{formatTimestamp(product.latestReviewTime)}</p>

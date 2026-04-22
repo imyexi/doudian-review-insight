@@ -91,6 +91,25 @@ export function UploadsPage(): ReactElement {
     },
   });
 
+  const continueMutation = useMutation({
+    mutationFn: (uploadId: number) => {
+      if (!selectedShopId) {
+        throw new Error("请先选择店铺");
+      }
+
+      return apiPost<Upload, Record<string, never>>(`/uploads/${uploadId}/continue`, {}, {
+        query: { shopId: selectedShopId },
+      });
+    },
+    onSuccess: async () => {
+      await invalidateShopQueries();
+      setFeedback("已重新加入分析队列。");
+    },
+    onError: error => {
+      setFeedback(getErrorMessage(error));
+    },
+  });
+
   const uploads = useMemo(() => uploadsQuery.data ?? [], [uploadsQuery.data]);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>): void {
@@ -176,10 +195,23 @@ export function UploadsPage(): ReactElement {
                     </div>
 
                     <div className="button-row button-row--tight">
+                      {upload.status === "failed" ? (
+                        <button
+                          className="button"
+                          type="button"
+                          disabled={continueMutation.isPending || deleteMutation.isPending}
+                          onClick={() => {
+                            setFeedback("");
+                            void continueMutation.mutateAsync(upload.id);
+                          }}
+                        >
+                          {continueMutation.isPending ? "恢复中..." : "继续分析"}
+                        </button>
+                      ) : null}
                       <button
                         className="button button--ghost"
                         type="button"
-                        disabled={deleteMutation.isPending}
+                        disabled={deleteMutation.isPending || continueMutation.isPending}
                         onClick={() => {
                           const shouldDelete = window.confirm(`确认删除批次「${upload.originalFilename}」吗？`);
                           if (!shouldDelete) {

@@ -33,6 +33,7 @@ export const products = sqliteTable("products", {
   displayName: text("display_name"),
   rawName: text("raw_name"),
   shortName: text("short_name"),
+  llmExtractedName: text("llm_extracted_name"),
   category: text("category"),
   notes: text("notes"),
   classificationSource: text("classification_source").notNull().default("auto"),
@@ -73,6 +74,7 @@ export const analysisSettings = sqliteTable("analysis_settings", {
   openaiModel: text("openai_model"),
   llmBatchSize: integer("llm_batch_size"),
   llmMaxConcurrency: integer("llm_max_concurrency"),
+  llmProductNameEnabled: integer("llm_product_name_enabled", { mode: "boolean" }).notNull().default(true),
   updatedAt: integer("updated_at").notNull().default(sql`(unixepoch())`),
 });
 
@@ -110,10 +112,12 @@ export const painPoints = sqliteTable("pain_points", {
   productGroupId: integer("product_group_id").references(() => productGroups.id, { onDelete: "set null" }),
   canonicalLabel: text("canonical_label").notNull(),
   category: text("category").notNull(),
+  sentiment: text("sentiment").notNull().default("negative"),
   description: text("description"),
   firstSeenAt: integer("first_seen_at").notNull(),
   lastSeenAt: integer("last_seen_at").notNull(),
   occurrenceCount: integer("occurrence_count").notNull().default(0),
+  specificityScore: integer("specificity_score"),
   source: text("source").notNull(),
   status: text("status").notNull().default("active"),
   createdAt: integer("created_at").notNull().default(sql`(unixepoch())`),
@@ -128,6 +132,7 @@ export const painPointEvidence = sqliteTable("pain_point_evidence", {
   painPointId: integer("pain_point_id").notNull().references(() => painPoints.id, { onDelete: "cascade" }),
   reviewId: integer("review_id").notNull().references(() => reviews.id, { onDelete: "cascade" }),
   excerpt: text("excerpt"),
+  specificityScore: integer("specificity_score"),
   createdAt: integer("created_at").notNull().default(sql`(unixepoch())`),
 }, table => ({
   relationUnique: uniqueIndex("pain_point_evidence_unique").on(table.painPointId, table.reviewId),

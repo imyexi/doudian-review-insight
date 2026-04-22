@@ -20,8 +20,10 @@ export const uploadStatusSchema = z.enum([
 
 export const painPointSourceSchema = z.enum(["rule", "llm", "merged"]);
 export const painPointModeSchema = z.enum(["historical", "new7d"]);
+export const painPointSortSchema = z.enum(["occurrence", "specificity", "recent"]);
 export const painPointStatusSchema = z.enum(["active", "archived"]);
 export const analysisModeSchema = z.enum(["rules_only", "llm_only", "hybrid"]);
+export const sentimentSchema = z.enum(["positive", "negative", "neutral"]);
 export const productClassificationSourceSchema = z.enum(["auto", "manual"]);
 export const reviewLevelSchema = z.enum(["好评", "中评", "差评"]);
 
@@ -56,6 +58,7 @@ export const productSchema = z.object({
   displayName: z.string().nullable(),
   rawName: z.string().nullable(),
   shortName: z.string().nullable(),
+  llmExtractedName: z.string().nullable(),
   category: z.string().nullable(),
   notes: z.string().nullable(),
   classificationSource: productClassificationSourceSchema,
@@ -126,6 +129,7 @@ export const painPointEvidenceSchema = z.object({
   painPointId: z.number().int().positive(),
   reviewId: z.number().int().positive(),
   excerpt: z.string().nullable(),
+  specificityScore: z.number().int().min(1).max(5).nullable(),
   createdAt: z.number().int().nonnegative(),
   review: reviewSchema.optional(),
 });
@@ -137,10 +141,12 @@ export const painPointSchema = z.object({
   productGroupId: z.number().int().positive().nullable(),
   canonicalLabel: z.string().min(1),
   category: painPointCategorySchema,
+  sentiment: sentimentSchema,
   description: z.string().nullable(),
   firstSeenAt: z.number().int().nonnegative(),
   lastSeenAt: z.number().int().nonnegative(),
   occurrenceCount: z.number().int().nonnegative(),
+  specificityScore: z.number().int().min(1).max(5).nullable(),
   source: painPointSourceSchema,
   status: painPointStatusSchema,
   createdAt: z.number().int().nonnegative(),
@@ -170,7 +176,9 @@ export const painPointListQuerySchema = z.object({
   productRefId: z.coerce.number().int().positive().optional(),
   productGroupId: z.coerce.number().int().positive().optional(),
   mode: painPointModeSchema.default("historical"),
+  sort: painPointSortSchema.default("occurrence"),
   category: z.array(painPointCategorySchema).optional(),
+  sentiment: z.array(sentimentSchema).optional(),
   q: z.string().trim().optional(),
 });
 
@@ -184,6 +192,7 @@ export const analysisSettingsSchema = z.object({
   openaiModel: z.string().min(1),
   llmBatchSize: z.number().int().min(1).max(100),
   llmMaxConcurrency: z.number().int().min(1).max(10),
+  llmProductNameEnabled: z.boolean(),
   hasApiKey: z.boolean(),
   maskedApiKey: z.string().nullable(),
   updatedAt: z.number().int().nonnegative(),
@@ -196,6 +205,7 @@ export const analysisSettingsUpdateSchema = z.object({
   openaiApiKey: z.string().trim().max(500).optional(),
   llmBatchSize: z.coerce.number().int().min(1).max(100),
   llmMaxConcurrency: z.coerce.number().int().min(1).max(10),
+  llmProductNameEnabled: z.boolean(),
 }).superRefine((value, context) => {
   if (value.analysisMode === "rules_only") {
     return;
@@ -222,7 +232,9 @@ export const analysisSettingsUpdateSchema = z.object({
 export const topPainPointOverviewSchema = z.object({
   canonicalLabel: z.string().min(1),
   category: painPointCategorySchema,
+  sentiment: sentimentSchema,
   occurrenceCount: z.number().int().nonnegative(),
+  specificityScore: z.number().int().min(1).max(5).nullable(),
   lastSeenAt: z.number().int().nonnegative(),
   relatedProducts: z.array(z.string()),
   extraProductCount: z.number().int().nonnegative(),
@@ -253,8 +265,10 @@ export type PainPointCategory = z.infer<typeof painPointCategorySchema>;
 export type UploadStatus = z.infer<typeof uploadStatusSchema>;
 export type PainPointSource = z.infer<typeof painPointSourceSchema>;
 export type PainPointMode = z.infer<typeof painPointModeSchema>;
+export type PainPointSort = z.infer<typeof painPointSortSchema>;
 export type PainPointStatus = z.infer<typeof painPointStatusSchema>;
 export type AnalysisMode = z.infer<typeof analysisModeSchema>;
+export type Sentiment = z.infer<typeof sentimentSchema>;
 export type ProductClassificationSource = z.infer<typeof productClassificationSourceSchema>;
 export type ReviewLevel = z.infer<typeof reviewLevelSchema>;
 export type Shop = z.infer<typeof shopSchema>;

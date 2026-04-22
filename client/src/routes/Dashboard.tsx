@@ -1,16 +1,48 @@
-import { useMemo, type ReactElement } from "react";
+import { useMemo, useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { OverviewStats } from "@shared/types";
+import type { OverviewStats, Sentiment } from "@shared/types";
 import { apiGet } from "@/api/client";
 import { EmptyShopState } from "@/components/EmptyShopState";
 import { useShop } from "@/hooks/useShop";
 import { formatDecimal, formatPercent, formatShortDate } from "@/lib/format";
 
+const SENTIMENT_OPTIONS: Sentiment[] = ["negative", "neutral", "positive"];
+
+function getSentimentLabel(sentiment: Sentiment): string {
+  if (sentiment === "positive") {
+    return "正向";
+  }
+
+  if (sentiment === "neutral") {
+    return "中性";
+  }
+
+  return "负向";
+}
+
+function getSentimentPillClassName(sentiment: Sentiment): string {
+  if (sentiment === "positive") {
+    return "pill pill--success";
+  }
+
+  if (sentiment === "neutral") {
+    return "pill";
+  }
+
+  return "pill pill--danger";
+}
+
 export function DashboardPage(): ReactElement {
   const { selectedShop, selectedShopId } = useShop();
+  const [selectedSentiments, setSelectedSentiments] = useState<Sentiment[]>([]);
   const statsQuery = useQuery({
-    queryKey: ["stats", selectedShopId],
-    queryFn: () => apiGet<OverviewStats>("/stats/overview", { query: { shopId: selectedShopId ?? undefined } }),
+    queryKey: ["stats", selectedShopId, selectedSentiments],
+    queryFn: () => apiGet<OverviewStats>("/stats/overview", {
+      query: {
+        shopId: selectedShopId ?? undefined,
+        sentiment: selectedSentiments,
+      },
+    }),
     enabled: selectedShopId !== null,
   });
 
@@ -18,6 +50,12 @@ export function DashboardPage(): ReactElement {
     const counts = statsQuery.data?.trend30d.map(item => item.count) ?? [];
     return counts.length > 0 ? Math.max(...counts) : 0;
   }, [statsQuery.data?.trend30d]);
+
+  function toggleSentiment(sentiment: Sentiment): void {
+    setSelectedSentiments(current =>
+      current.includes(sentiment) ? current.filter(item => item !== sentiment) : [...current, sentiment],
+    );
+  }
 
   if (!selectedShop) {
     return (
@@ -96,29 +134,53 @@ export function DashboardPage(): ReactElement {
         </section>
 
         <section className="surface panel-card">
-          <span className="eyebrow">Top Pain Points</span>
-          <h3>高频痛点</h3>
-          <div className="list-stack">
-            {stats.topPainPoints.length > 0 ? (
-              stats.topPainPoints.map(item => (
-                <div key={`${item.category}-${item.canonicalLabel}`} className="list-row">
-                  <div>
-                    <strong>{item.canonicalLabel}</strong>
-                    <p>
-                      {item.category}
-                      {" · "}
-                      关联商品：{item.relatedProducts.join("、")}
-                      {item.extraProductCount > 0 ? ` 等 +${item.extraProductCount}` : ""}
-                      {" · "}
-                      最近出现于 {new Date(item.lastSeenAt * 1000).toLocaleDateString("zh-CN")}
-                    </p>
+          <div className="row-heading row-heading--spread">
+            <div>
+              <span className="eyebrow">Top Pain Points</span>
+              <h3>高频痛点</h3>
+            </div>
+            <span className="pill">已筛选 {stats.topPainPoints.length}</span>
+          </div>
+          <div className="stack-md">
+            <div className="chip-row">
+              {SENTIMENT_OPTIONS.map(sentiment => {
+                const isActive = selectedSentiments.includes(sentiment);
+                return (
+                  <button
+                    key={sentiment}
+                    className={`category-chip ${isActive ? "category-chip--active" : ""}`}
+                    type="button"
+                    onClick={() => toggleSentiment(sentiment)}
+                  >
+                    {getSentimentLabel(sentiment)}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="list-stack">
+              {stats.topPainPoints.length > 0 ? (
+                stats.topPainPoints.map(item => (
+                  <div key={`${item.category}-${item.sentiment}-${item.canonicalLabel}`} className="list-row">
+                    <div>
+                      <div className="button-row button-row--tight">
+                        <strong>{item.canonicalLabel}</strong>
+                        <span className="pill pill--accent">{item.category}</span>
+                        <span className={getSentimentPillClassName(item.sentiment)}>{getSentimentLabel(item.sentiment)}</span>
+                      </div>
+                      <p>
+                        关联商品：{item.relatedProducts.join("、")}
+                        {item.extraProductCount > 0 ? ` 等 +${item.extraProductCount}` : ""}
+                        {" · "}
+                        最近出现于 {new Date(item.lastSeenAt * 1000).toLocaleDateString("zh-CN")}
+                      </p>
+                    </div>
+                    <span className="pill">{item.occurrenceCount} 次</span>
                   </div>
-                  <span className="pill">{item.occurrenceCount} 次</span>
-                </div>
-              ))
-            ) : (
-              <p>当前店铺还没有痛点记录，先上传评论后再回来查看。</p>
-            )}
+                ))
+              ) : (
+                <p>{selectedSentiments.length > 0 ? "当前情绪筛选下还没有痛点记录。" : "当前店铺还没有痛点记录，先上传评论后再回来查看。"}</p>
+              )}
+            </div>
           </div>
         </section>
       </div>

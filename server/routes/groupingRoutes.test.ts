@@ -6,6 +6,14 @@ import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const { extractProductNamesMock } = vi.hoisted(() => ({
+  extractProductNamesMock: vi.fn(async () => ({} as Record<string, string>)),
+}));
+
+vi.mock("../jobs/llmProductName", () => ({
+  extractProductNamesWithLlm: extractProductNamesMock,
+}));
+
 interface TestContext {
   analyzeQueue: AnalyzeQueue;
   analyzeReviews: (items: ReviewRow[]) => Promise<void>;
@@ -29,6 +37,8 @@ describe("grouping regression routes", () => {
   let context: TestContext | undefined;
 
   beforeEach(async () => {
+    extractProductNamesMock.mockReset();
+    extractProductNamesMock.mockResolvedValue({});
     context = await setupTestContext();
   });
 
@@ -56,6 +66,35 @@ describe("grouping regression routes", () => {
       { headers: { cookie } },
     );
     expect(specStatsResponse.status).toBe(404);
+  });
+
+  it("filters cross-shop evidence out of pain-point summaries", async () => {
+    const currentContext = requireContext(context);
+    const shopA = await seedPainPointBundle(currentContext, "A");
+    const shopB = await seedPainPointBundle(currentContext, "B");
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    await currentContext.db.insert(currentContext.schema.painPointEvidence).values({
+      painPointId: shopA.painPointId,
+      reviewId: shopB.reviewId,
+      excerpt: "cross-shop leak",
+    });
+
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/pain-points?shopId=${shopA.shopId}&mode=historical`,
+      { headers: { cookie } },
+    );
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<PainPointListApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+
+    expect(payload.data).toHaveLength(1);
+    expect(payload.data[0]?.topEvidence).toHaveLength(1);
+    expect(payload.data[0]?.topEvidence?.[0]?.reviewId).toBe(shopA.reviewId);
   });
 
   it("returns an empty review result when painPointId belongs to another shop", async () => {
@@ -94,6 +133,173 @@ describe("grouping regression routes", () => {
     expect(sameShopPayload.data.total).toBe(1);
     expect(sameShopPayload.data.items).toHaveLength(1);
     expect(sameShopPayload.data.items[0]?.id).toBe(shopA.reviewId);
+  });
+
+  it("ignores cross-shop evidence rows when listing reviews for a pain point", async () => {
+    const currentContext = requireContext(context);
+    const shopA = await seedPainPointBundle(currentContext, "A");
+    const shopB = await seedPainPointBundle(currentContext, "B");
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    await currentContext.db.insert(currentContext.schema.painPointEvidence).values({
+      painPointId: shopA.painPointId,
+      reviewId: shopB.reviewId,
+      excerpt: "cross-shop leak",
+    });
+
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/reviews?shopId=${shopA.shopId}&painPointId=${shopA.painPointId}&page=1&pageSize=20`,
+      { headers: { cookie } },
+    );
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<ReviewListApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful review payload");
+    }
+
+    expect(payload.data.total).toBe(1);
+    expect(payload.data.items).toHaveLength(1);
+    expect(payload.data.items[0]?.id).toBe(shopA.reviewId);
+  });
+
+  it("applies painPointId with productGroupId filters without leaking unrelated reviews", async () => {
+    const currentContext = requireContext(context);
+    const shopA = await seedPainPointBundle(currentContext, "A");
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    const [otherGroup] = await currentContext.db
+      .insert(currentContext.schema.productGroups)
+      .values({
+        shopId: shopA.shopId,
+        name: "Other Group A",
+        shortName: "other-group-a",
+        updatedAt: 1_710_000_500,
+      })
+      .returning({ id: currentContext.schema.productGroups.id });
+
+    const [otherProduct] = await currentContext.db
+      .insert(currentContext.schema.products)
+      .values({
+        shopId: shopA.shopId,
+        productGroupId: otherGroup.id,
+        doudianProductId: "product-a-other",
+        rawName: "测试商品 A 其他组",
+        shortName: "other-group-a",
+        classificationSource: "auto",
+        classificationLocked: false,
+        updatedAt: 1_710_000_500,
+      })
+      .returning({ id: currentContext.schema.products.id });
+
+    await currentContext.db.insert(currentContext.schema.reviews).values({
+      shopId: shopA.shopId,
+      productRefId: otherProduct.id,
+      productGroupId: otherGroup.id,
+      doudianOrderId: "order-a-other",
+      doudianProductId: "product-a-other",
+      productName: "测试商品 A 其他组",
+      productSpec: "其他规格",
+      content: "同店其他组的评论",
+      reviewTime: 1_710_000_501,
+      merchantReplied: false,
+    });
+
+    const matchingResponse = await fetch(
+      `${currentContext.baseUrl}/api/reviews?shopId=${shopA.shopId}&painPointId=${shopA.painPointId}&productGroupId=${shopA.productGroupId}&page=1&pageSize=20`,
+      { headers: { cookie } },
+    );
+    expect(matchingResponse.status).toBe(200);
+
+    const matchingPayload = await readJson<ReviewListApiResponse>(matchingResponse);
+    expect(matchingPayload.ok).toBe(true);
+    if (!matchingPayload.ok) {
+      throw new Error("expected a successful review payload");
+    }
+
+    expect(matchingPayload.data.total).toBe(1);
+    expect(matchingPayload.data.items).toHaveLength(1);
+    expect(matchingPayload.data.items[0]?.id).toBe(shopA.reviewId);
+
+    const mismatchedResponse = await fetch(
+      `${currentContext.baseUrl}/api/reviews?shopId=${shopA.shopId}&painPointId=${shopA.painPointId}&productGroupId=${otherGroup.id}&page=1&pageSize=20`,
+      { headers: { cookie } },
+    );
+    expect(mismatchedResponse.status).toBe(200);
+    expect(await readJson<ReviewListApiResponse>(mismatchedResponse)).toEqual({
+      ok: true,
+      data: {
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 20,
+      },
+    });
+  });
+
+  it("applies painPointId with productRefId filters without leaking sibling products", async () => {
+    const currentContext = requireContext(context);
+    const shopA = await seedPainPointBundle(currentContext, "A");
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    const [siblingProduct] = await currentContext.db
+      .insert(currentContext.schema.products)
+      .values({
+        shopId: shopA.shopId,
+        productGroupId: shopA.productGroupId,
+        doudianProductId: "product-a-sibling",
+        rawName: "测试商品 A 同组兄弟款",
+        shortName: "group-a",
+        classificationSource: "auto",
+        classificationLocked: false,
+        updatedAt: 1_710_000_600,
+      })
+      .returning({ id: currentContext.schema.products.id });
+
+    await currentContext.db.insert(currentContext.schema.reviews).values({
+      shopId: shopA.shopId,
+      productRefId: siblingProduct.id,
+      productGroupId: shopA.productGroupId,
+      doudianOrderId: "order-a-sibling",
+      doudianProductId: "product-a-sibling",
+      productName: "测试商品 A 同组兄弟款",
+      productSpec: "同组规格",
+      content: "同组兄弟商品评论",
+      reviewTime: 1_710_000_601,
+      merchantReplied: false,
+    });
+
+    const matchingResponse = await fetch(
+      `${currentContext.baseUrl}/api/reviews?shopId=${shopA.shopId}&painPointId=${shopA.painPointId}&productRefId=${shopA.productRefId}&page=1&pageSize=20`,
+      { headers: { cookie } },
+    );
+    expect(matchingResponse.status).toBe(200);
+
+    const matchingPayload = await readJson<ReviewListApiResponse>(matchingResponse);
+    expect(matchingPayload.ok).toBe(true);
+    if (!matchingPayload.ok) {
+      throw new Error("expected a successful review payload");
+    }
+
+    expect(matchingPayload.data.total).toBe(1);
+    expect(matchingPayload.data.items).toHaveLength(1);
+    expect(matchingPayload.data.items[0]?.id).toBe(shopA.reviewId);
+
+    const siblingResponse = await fetch(
+      `${currentContext.baseUrl}/api/reviews?shopId=${shopA.shopId}&painPointId=${shopA.painPointId}&productRefId=${siblingProduct.id}&page=1&pageSize=20`,
+      { headers: { cookie } },
+    );
+    expect(siblingResponse.status).toBe(200);
+    expect(await readJson<ReviewListApiResponse>(siblingResponse)).toEqual({
+      ok: true,
+      data: {
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 20,
+      },
+    });
   });
 
   it("requires shop scoping for upload reads and blocks cross-shop access", async () => {
@@ -546,6 +752,7 @@ describe("grouping regression routes", () => {
       "烤馍",
       "香葱牛轧饼干",
     ]);
+    expect(productsPayload.data.every(item => item.llmExtractedName === null)).toBe(true);
 
     const uniqueGroupIds = new Set(productsPayload.data.map(item => item.productGroupId));
     expect(uniqueGroupIds.size).toBe(2);
@@ -564,10 +771,527 @@ describe("grouping regression routes", () => {
     expect(groupsPayload.data.map(group => group.shortName).sort()).toEqual(["烤馍", "香葱牛轧饼干"]);
     expect(groupsPayload.data.map(group => group.name).sort()).toEqual(["烤馍", "香葱牛轧饼干"]);
   });
+
+  it("skips llm product-name extraction when the toggle is disabled", async () => {
+    const currentContext = requireContext(context);
+    const [shop] = await currentContext.db
+      .insert(currentContext.schema.shops)
+      .values({ name: "Rules Only Shop" })
+      .returning({ id: currentContext.schema.shops.id });
+
+    const uploadPath = path.join(currentContext.env.UPLOADS_DIR, "rules-only-upload.xlsx");
+    fs.mkdirSync(currentContext.env.UPLOADS_DIR, { recursive: true });
+    fs.writeFileSync(uploadPath, "placeholder");
+
+    const [upload] = await currentContext.db
+      .insert(currentContext.schema.uploads)
+      .values({
+        shopId: shop.id,
+        originalFilename: "rules-only-upload.xlsx",
+        storedPath: uploadPath,
+        status: "queued",
+      })
+      .returning({ id: currentContext.schema.uploads.id });
+
+    await currentContext.db.insert(currentContext.schema.analysisSettings).values({
+      id: 1,
+      analysisMode: "hybrid",
+      openaiBaseUrl: "http://example.com/openai/v1",
+      openaiApiKey: "test-key",
+      openaiModel: "test-model",
+      llmBatchSize: 20,
+      llmMaxConcurrency: 2,
+      llmProductNameEnabled: false,
+      updatedAt: 1_710_100_000,
+    });
+
+    const parseExcelSpy = vi.spyOn(await import("../jobs/parseExcel"), "parseExcel").mockReturnValue([
+      {
+        orderId: "rules-order-1",
+        productId: "rules-product-1",
+        productName: "美康粉黛轻透防晒乳50g SPF50+",
+        productSpec: "标准装",
+        rating: 5,
+        level: "好评",
+        content: null,
+        appendContent: null,
+        reviewTime: 1_710_100_001,
+        appendTime: null,
+        userNick: "Rule",
+        merchantReplied: false,
+        replyContent: null,
+        shopExternalId: null,
+        shopName: null,
+      },
+    ]);
+
+    try {
+      await currentContext.analyzeUpload(upload.id);
+    } finally {
+      parseExcelSpy.mockRestore();
+    }
+
+    expect(extractProductNamesMock).not.toHaveBeenCalled();
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const productsResponse = await fetch(`${currentContext.baseUrl}/api/shops/${shop.id}/products`, {
+      headers: { cookie },
+    });
+    expect(productsResponse.status).toBe(200);
+
+    const productsPayload = await readJson<ProductListApiResponse>(productsResponse);
+    expect(productsPayload.ok).toBe(true);
+    if (!productsPayload.ok) {
+      throw new Error("expected a successful product payload");
+    }
+
+    expect(productsPayload.data).toHaveLength(1);
+    expect(productsPayload.data[0]?.llmExtractedName).toBeNull();
+  });
+
+  it("persists llm-extracted product names when the toggle is enabled", async () => {
+    const currentContext = requireContext(context);
+    const [shop] = await currentContext.db
+      .insert(currentContext.schema.shops)
+      .values({ name: "LLM Product Name Shop" })
+      .returning({ id: currentContext.schema.shops.id });
+
+    const uploadPath = path.join(currentContext.env.UPLOADS_DIR, "llm-product-name-upload.xlsx");
+    fs.mkdirSync(currentContext.env.UPLOADS_DIR, { recursive: true });
+    fs.writeFileSync(uploadPath, "placeholder");
+
+    const [upload] = await currentContext.db
+      .insert(currentContext.schema.uploads)
+      .values({
+        shopId: shop.id,
+        originalFilename: "llm-product-name-upload.xlsx",
+        storedPath: uploadPath,
+        status: "queued",
+      })
+      .returning({ id: currentContext.schema.uploads.id });
+
+    await currentContext.db.insert(currentContext.schema.analysisSettings).values({
+      id: 1,
+      analysisMode: "hybrid",
+      openaiBaseUrl: "http://example.com/openai/v1",
+      openaiApiKey: "test-key",
+      openaiModel: "test-model",
+      llmBatchSize: 20,
+      llmMaxConcurrency: 2,
+      llmProductNameEnabled: true,
+      updatedAt: 1_710_100_100,
+    });
+
+    const parseExcelSpy = vi.spyOn(await import("../jobs/parseExcel"), "parseExcel").mockReturnValue([
+      {
+        orderId: "llm-order-1",
+        productId: "llm-product-1",
+        productName: "美康粉黛轻透防晒乳50g SPF50+",
+        productSpec: "标准装",
+        rating: 5,
+        level: "好评",
+        content: null,
+        appendContent: null,
+        reviewTime: 1_710_100_101,
+        appendTime: null,
+        userNick: "LLM",
+        merchantReplied: false,
+        replyContent: null,
+        shopExternalId: null,
+        shopName: null,
+      },
+    ]);
+    extractProductNamesMock.mockResolvedValue({ "llm-product-1": "轻透防晒乳" });
+
+    try {
+      await currentContext.analyzeUpload(upload.id);
+    } finally {
+      parseExcelSpy.mockRestore();
+    }
+
+    expect(extractProductNamesMock).toHaveBeenCalledTimes(1);
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const productsResponse = await fetch(`${currentContext.baseUrl}/api/shops/${shop.id}/products`, {
+      headers: { cookie },
+    });
+    expect(productsResponse.status).toBe(200);
+
+    const productsPayload = await readJson<ProductListApiResponse>(productsResponse);
+    expect(productsPayload.ok).toBe(true);
+    if (!productsPayload.ok) {
+      throw new Error("expected a successful product payload");
+    }
+
+    expect(productsPayload.data).toHaveLength(1);
+    expect(productsPayload.data[0]?.llmExtractedName).toBe("轻透防晒乳");
+    expect(productsPayload.data[0]?.shortName).toBe("轻透防晒乳");
+  });
+
+  it("rejects continue for a done upload with 409", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedUploadDeleteFixture(currentContext);
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/uploads/${fixture.survivingUploadId}/continue?shopId=${fixture.shopId}`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(response.status).toBe(409);
+  });
+
+  it("rejects continue for a cross-shop upload with 404", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedUploadDeleteFixture(currentContext);
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    const [otherShop] = await currentContext.db
+      .insert(currentContext.schema.shops)
+      .values({ name: "Other Shop Continue" })
+      .returning({ id: currentContext.schema.shops.id });
+
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/uploads/${fixture.survivingUploadId}/continue?shopId=${otherShop.id}`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it("rejects continue when the source file is missing", async () => {
+    const currentContext = requireContext(context);
+    const [shop] = await currentContext.db
+      .insert(currentContext.schema.shops)
+      .values({ name: "Missing File Shop" })
+      .returning({ id: currentContext.schema.shops.id });
+
+    const [upload] = await currentContext.db
+      .insert(currentContext.schema.uploads)
+      .values({
+        shopId: shop.id,
+        originalFilename: "missing.xlsx",
+        storedPath: "/nonexistent/missing.xlsx",
+        status: "failed",
+        error: "network error",
+        finishedAt: 1_710_000_100,
+      })
+      .returning({ id: currentContext.schema.uploads.id });
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/uploads/${upload.id}/continue?shopId=${shop.id}`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(response.status).toBe(409);
+  });
+
+  it("continues a failed upload by cleaning partial data and re-enqueuing analysis", async () => {
+    const currentContext = requireContext(context);
+    const [shop] = await currentContext.db
+      .insert(currentContext.schema.shops)
+      .values({ name: "Continue Analysis Shop" })
+      .returning({ id: currentContext.schema.shops.id });
+
+    const uploadPath = path.join(currentContext.env.UPLOADS_DIR, "continue-analysis.xlsx");
+    fs.mkdirSync(currentContext.env.UPLOADS_DIR, { recursive: true });
+    fs.writeFileSync(uploadPath, "placeholder");
+
+    const [upload] = await currentContext.db
+      .insert(currentContext.schema.uploads)
+      .values({
+        shopId: shop.id,
+        originalFilename: "continue-analysis.xlsx",
+        storedPath: uploadPath,
+        status: "failed",
+        error: "network timeout",
+        finishedAt: 1_710_400_000,
+        progressCurrent: 5,
+        progressTotal: 10,
+        rowCount: 10,
+      })
+      .returning({ id: currentContext.schema.uploads.id });
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/uploads/${upload.id}/continue?shopId=${shop.id}`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<UploadDetailApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful upload payload");
+    }
+
+    expect(payload.data.status).toBe("queued");
+    expect(payload.data.error).toBeNull();
+    expect(payload.data.finishedAt).toBeNull();
+  });
+
+  it("cleans partial reviews and products when continuing a failed upload", async () => {
+    const currentContext = requireContext(context);
+    const [shop] = await currentContext.db
+      .insert(currentContext.schema.shops)
+      .values({ name: "Clean Partial Shop" })
+      .returning({ id: currentContext.schema.shops.id });
+
+    const [group] = await currentContext.db
+      .insert(currentContext.schema.productGroups)
+      .values({
+        shopId: shop.id,
+        name: "Partial Group",
+        shortName: "partial-group",
+        updatedAt: 1_710_500_000,
+      })
+      .returning({ id: currentContext.schema.productGroups.id });
+
+    const [product] = await currentContext.db
+      .insert(currentContext.schema.products)
+      .values({
+        shopId: shop.id,
+        productGroupId: group.id,
+        doudianProductId: "partial-product",
+        rawName: "部分导入商品",
+        shortName: "partial-group",
+        classificationSource: "auto",
+        classificationLocked: false,
+        updatedAt: 1_710_500_000,
+      })
+      .returning({ id: currentContext.schema.products.id });
+
+    const uploadPath = path.join(currentContext.env.UPLOADS_DIR, "clean-partial.xlsx");
+    fs.mkdirSync(currentContext.env.UPLOADS_DIR, { recursive: true });
+    fs.writeFileSync(uploadPath, "placeholder");
+
+    const [upload] = await currentContext.db
+      .insert(currentContext.schema.uploads)
+      .values({
+        shopId: shop.id,
+        originalFilename: "clean-partial.xlsx",
+        storedPath: uploadPath,
+        status: "failed",
+        error: "connection reset",
+        finishedAt: 1_710_500_100,
+      })
+      .returning({ id: currentContext.schema.uploads.id });
+
+    await currentContext.db.insert(currentContext.schema.reviews).values({
+      shopId: shop.id,
+      productRefId: product.id,
+      productGroupId: group.id,
+      uploadId: upload.id,
+      doudianOrderId: "partial-order-1",
+      doudianProductId: "partial-product",
+      productName: "部分导入商品",
+      productSpec: "标准",
+      content: "包装破损",
+      reviewTime: 1_710_500_001,
+      merchantReplied: false,
+    });
+
+    await currentContext.analyzeReviews(
+      await currentContext.db
+        .select()
+        .from(currentContext.schema.reviews)
+        .where(eq(currentContext.schema.reviews.shopId, shop.id)),
+    );
+
+    const beforePainPoints = await currentContext.db
+      .select({ id: currentContext.schema.painPoints.id })
+      .from(currentContext.schema.painPoints)
+      .where(eq(currentContext.schema.painPoints.shopId, shop.id));
+    expect(beforePainPoints.length).toBeGreaterThan(0);
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const continueResponse = await fetch(
+      `${currentContext.baseUrl}/api/uploads/${upload.id}/continue?shopId=${shop.id}`,
+      { method: "POST", headers: { cookie } },
+    );
+    expect(continueResponse.status).toBe(200);
+
+    const remainingReviews = await currentContext.db
+      .select({ id: currentContext.schema.reviews.id })
+      .from(currentContext.schema.reviews)
+      .where(eq(currentContext.schema.reviews.uploadId, upload.id));
+    expect(remainingReviews).toHaveLength(0);
+
+    const remainingPainPoints = await currentContext.db
+      .select({ id: currentContext.schema.painPoints.id })
+      .from(currentContext.schema.painPoints)
+      .where(eq(currentContext.schema.painPoints.shopId, shop.id));
+    expect(remainingPainPoints).toHaveLength(0);
+  });
+
+  it("filters overview top pain points by a single sentiment", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedSentimentSearchFixture(currentContext);
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/stats/overview?shopId=${fixture.shopId}&sentiment=negative`,
+      { headers: { cookie } },
+    );
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<StatsApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful stats payload");
+    }
+
+    expect(payload.data.topPainPoints).toHaveLength(1);
+    expect(payload.data.topPainPoints.map(item => item.sentiment)).toEqual(["negative"]);
+    expect(payload.data.topPainPoints[0]?.canonicalLabel).toBe("包装压坏");
+  });
+
+  it("filters overview top pain points by multiple sentiments", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedSentimentSearchFixture(currentContext);
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/stats/overview?shopId=${fixture.shopId}&sentiment=negative&sentiment=neutral`,
+      { headers: { cookie } },
+    );
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<StatsApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful stats payload");
+    }
+
+    expect(payload.data.topPainPoints).toHaveLength(2);
+    expect(payload.data.topPainPoints.map(item => item.sentiment).sort()).toEqual(["negative", "neutral"]);
+  });
+
+  it("filters pain-point list by sentiment", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedSentimentSearchFixture(currentContext);
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical&sentiment=neutral`,
+      { headers: { cookie } },
+    );
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<PainPointListApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+
+    expect(payload.data).toHaveLength(1);
+    expect(payload.data[0]?.id).toBe(fixture.neutralPainPointId);
+    expect(payload.data[0]?.sentiment).toBe("neutral");
+  });
+
+  it("filters noteworthy pain points by sentiment", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedSentimentSearchFixture(currentContext);
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    const response = await fetch(
+      `${currentContext.baseUrl}/api/pain-points/noteworthy?shopId=${fixture.shopId}&sentiment=positive`,
+      { headers: { cookie } },
+    );
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<PainPointListApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+
+    expect(payload.data).toHaveLength(1);
+    expect(payload.data[0]?.id).toBe(fixture.positivePainPointId);
+    expect(payload.data[0]?.sentiment).toBe("positive");
+  });
+
+  it("matches pain-point search against review and evidence text", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedSentimentSearchFixture(currentContext);
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+
+    const reviewContentResponse = await fetch(
+      `${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical&q=${fixture.reviewContentToken}`,
+      { headers: { cookie } },
+    );
+    expect(reviewContentResponse.status).toBe(200);
+    const reviewContentPayload = await readJson<PainPointListApiResponse>(reviewContentResponse);
+    expect(reviewContentPayload.ok).toBe(true);
+    if (!reviewContentPayload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+    expect(reviewContentPayload.data.map(item => item.id)).toEqual([fixture.negativePainPointId]);
+
+    const appendResponse = await fetch(
+      `${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical&q=${fixture.appendToken}`,
+      { headers: { cookie } },
+    );
+    expect(appendResponse.status).toBe(200);
+    const appendPayload = await readJson<PainPointListApiResponse>(appendResponse);
+    expect(appendPayload.ok).toBe(true);
+    if (!appendPayload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+    expect(appendPayload.data.map(item => item.id)).toEqual([fixture.neutralPainPointId]);
+
+    const productNameResponse = await fetch(
+      `${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical&q=${fixture.productNameToken}`,
+      { headers: { cookie } },
+    );
+    expect(productNameResponse.status).toBe(200);
+    const productNamePayload = await readJson<PainPointListApiResponse>(productNameResponse);
+    expect(productNamePayload.ok).toBe(true);
+    if (!productNamePayload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+    expect(productNamePayload.data.map(item => item.id)).toEqual([fixture.positivePainPointId]);
+
+    const productSpecResponse = await fetch(
+      `${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical&q=${fixture.productSpecToken}`,
+      { headers: { cookie } },
+    );
+    expect(productSpecResponse.status).toBe(200);
+    const productSpecPayload = await readJson<PainPointListApiResponse>(productSpecResponse);
+    expect(productSpecPayload.ok).toBe(true);
+    if (!productSpecPayload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+    expect(productSpecPayload.data.map(item => item.id)).toEqual([fixture.positivePainPointId]);
+
+    const excerptResponse = await fetch(
+      `${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical&q=${fixture.excerptToken}`,
+      { headers: { cookie } },
+    );
+    expect(excerptResponse.status).toBe(200);
+    const excerptPayload = await readJson<PainPointListApiResponse>(excerptResponse);
+    expect(excerptPayload.ok).toBe(true);
+    if (!excerptPayload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+    expect(excerptPayload.data.map(item => item.id)).toEqual([fixture.positivePainPointId]);
+  });
 });
+
+interface SeededSentimentSearchFixture {
+  appendToken: string;
+  excerptToken: string;
+  negativePainPointId: number;
+  neutralPainPointId: number;
+  positivePainPointId: number;
+  productNameToken: string;
+  productSpecToken: string;
+  reviewContentToken: string;
+  shopId: number;
+}
 
 interface SeededPainPointBundle {
   painPointId: number;
+  productGroupId: number;
+  productRefId: number;
   reviewId: number;
   shopId: number;
 }
@@ -605,7 +1329,10 @@ interface DeleteApiResponse {
 
 interface UploadItem {
   id: number;
+  error?: string | null;
+  finishedAt?: number | null;
   originalFilename?: string;
+  status?: string;
 }
 
 interface UploadDetailApiResponse {
@@ -620,6 +1347,7 @@ interface UploadListApiResponse {
 
 interface ProductListItem {
   id: number;
+  llmExtractedName: string | null;
   productGroupId: number | null;
   shortName: string | null;
 }
@@ -640,12 +1368,20 @@ interface ProductGroupListApiResponse {
   data: ProductGroupListItem[];
 }
 
+interface StatsTopPainPointItem {
+  canonicalLabel: string;
+  category: string;
+  sentiment: string;
+  occurrenceCount: number;
+}
+
 interface StatsPayload {
   totalReviews: number;
   painPoints: {
     historical: number;
     new7d: number;
   };
+  topPainPoints: StatsTopPainPointItem[];
 }
 
 interface StatsApiResponse {
@@ -680,7 +1416,9 @@ interface PainPointEvidenceApiResponse {
 
 interface PainPointListItem {
   id: number;
+  canonicalLabel?: string;
   occurrenceCount: number;
+  sentiment?: string;
   topEvidence?: PainPointEvidenceApiItem[];
 }
 
@@ -838,6 +1576,241 @@ async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function seedSentimentSearchFixture(context: TestContext): Promise<SeededSentimentSearchFixture> {
+  const now = 1_710_600_000;
+  const appendToken = "APPEND_ONLY_HIT";
+  const excerptToken = "EXCERPT_ONLY_HIT";
+  const productNameToken = "NAME_ONLY_HIT";
+  const productSpecToken = "SPEC_ONLY_HIT";
+  const reviewContentToken = "CONTENT_ONLY_HIT";
+
+  const [shop] = await context.db
+    .insert(context.schema.shops)
+    .values({ name: "Sentiment Search Shop" })
+    .returning({ id: context.schema.shops.id });
+
+  const [group] = await context.db
+    .insert(context.schema.productGroups)
+    .values({
+      shopId: shop.id,
+      name: "Sentiment Search Group",
+      shortName: "sentiment-search-group",
+      updatedAt: now,
+    })
+    .returning({ id: context.schema.productGroups.id });
+
+  const productRows = await context.db
+    .insert(context.schema.products)
+    .values([
+      {
+        shopId: shop.id,
+        productGroupId: group.id,
+        doudianProductId: "sentiment-negative-product",
+        rawName: "负向测试商品",
+        shortName: "sentiment-search-group",
+        classificationSource: "auto",
+        classificationLocked: false,
+        updatedAt: now,
+      },
+      {
+        shopId: shop.id,
+        productGroupId: group.id,
+        doudianProductId: "sentiment-neutral-product",
+        rawName: "中性测试商品",
+        shortName: "sentiment-search-group",
+        classificationSource: "auto",
+        classificationLocked: false,
+        updatedAt: now + 1,
+      },
+      {
+        shopId: shop.id,
+        productGroupId: group.id,
+        doudianProductId: "sentiment-positive-product",
+        rawName: "正向测试商品",
+        shortName: "sentiment-search-group",
+        classificationSource: "auto",
+        classificationLocked: false,
+        updatedAt: now + 2,
+      },
+    ])
+    .returning({ id: context.schema.products.id, doudianProductId: context.schema.products.doudianProductId });
+
+  const negativeProduct = productRows.find(item => item.doudianProductId === "sentiment-negative-product");
+  const neutralProduct = productRows.find(item => item.doudianProductId === "sentiment-neutral-product");
+  const positiveProduct = productRows.find(item => item.doudianProductId === "sentiment-positive-product");
+  if (!negativeProduct || !neutralProduct || !positiveProduct) {
+    throw new Error("expected sentiment fixture products to be created");
+  }
+
+  const reviewRows = await context.db
+    .insert(context.schema.reviews)
+    .values([
+      {
+        shopId: shop.id,
+        productRefId: negativeProduct.id,
+        productGroupId: group.id,
+        doudianOrderId: "sentiment-order-negative",
+        doudianProductId: negativeProduct.doudianProductId,
+        productName: "负向测试商品",
+        productSpec: "NEGATIVE_SPEC",
+        content: `包装被压坏 ${reviewContentToken}`,
+        appendContent: null,
+        reviewTime: now,
+        merchantReplied: false,
+      },
+      {
+        shopId: shop.id,
+        productRefId: neutralProduct.id,
+        productGroupId: group.id,
+        doudianOrderId: "sentiment-order-neutral",
+        doudianProductId: neutralProduct.doudianProductId,
+        productName: "中性测试商品",
+        productSpec: "NEUTRAL_SPEC",
+        content: "先看看后续表现",
+        appendContent: `后续补充 ${appendToken}`,
+        reviewTime: now + 1,
+        appendTime: now + 2,
+        merchantReplied: false,
+      },
+      {
+        shopId: shop.id,
+        productRefId: positiveProduct.id,
+        productGroupId: group.id,
+        doudianOrderId: "sentiment-order-positive",
+        doudianProductId: positiveProduct.doudianProductId,
+        productName: `回购爆款 ${productNameToken}`,
+        productSpec: productSpecToken,
+        content: "口感很好",
+        appendContent: null,
+        reviewTime: now + 3,
+        merchantReplied: false,
+      },
+    ])
+    .returning({ id: context.schema.reviews.id, doudianOrderId: context.schema.reviews.doudianOrderId });
+
+  const negativeReview = reviewRows.find(item => item.doudianOrderId === "sentiment-order-negative");
+  const neutralReview = reviewRows.find(item => item.doudianOrderId === "sentiment-order-neutral");
+  const positiveReview = reviewRows.find(item => item.doudianOrderId === "sentiment-order-positive");
+  if (!negativeReview || !neutralReview || !positiveReview) {
+    throw new Error("expected sentiment fixture reviews to be created");
+  }
+
+  const painPointRows = await context.db
+    .insert(context.schema.painPoints)
+    .values([
+      {
+        shopId: shop.id,
+        productRefId: negativeProduct.id,
+        productGroupId: group.id,
+        canonicalLabel: "包装压坏",
+        category: "质量",
+        sentiment: "negative",
+        description: "物流挤压导致包装破损",
+        firstSeenAt: now,
+        lastSeenAt: now,
+        occurrenceCount: 1,
+        specificityScore: 4,
+        source: "rule",
+        status: "active",
+        createdAt: now,
+      },
+      {
+        shopId: shop.id,
+        productRefId: neutralProduct.id,
+        productGroupId: group.id,
+        canonicalLabel: "观望后续表现",
+        category: "使用体验",
+        sentiment: "neutral",
+        description: "当前评价偏中性，等待后续使用反馈",
+        firstSeenAt: now + 1,
+        lastSeenAt: now + 1,
+        occurrenceCount: 1,
+        specificityScore: 3,
+        source: "rule",
+        status: "active",
+        createdAt: now + 1,
+      },
+      {
+        shopId: shop.id,
+        productRefId: positiveProduct.id,
+        productGroupId: group.id,
+        canonicalLabel: "值得回购",
+        category: "使用体验",
+        sentiment: "positive",
+        description: "正向反馈明显，适合重点展示",
+        firstSeenAt: now + 3,
+        lastSeenAt: now + 3,
+        occurrenceCount: 1,
+        specificityScore: 5,
+        source: "rule",
+        status: "active",
+        createdAt: now + 3,
+      },
+    ])
+    .returning({ id: context.schema.painPoints.id, canonicalLabel: context.schema.painPoints.canonicalLabel });
+
+  const negativePainPoint = painPointRows.find(item => item.canonicalLabel === "包装压坏");
+  const neutralPainPoint = painPointRows.find(item => item.canonicalLabel === "观望后续表现");
+  const positivePainPoint = painPointRows.find(item => item.canonicalLabel === "值得回购");
+  if (!negativePainPoint || !neutralPainPoint || !positivePainPoint) {
+    throw new Error("expected sentiment fixture pain points to be created");
+  }
+
+  await context.db.insert(context.schema.painPointEvidence).values([
+    {
+      painPointId: negativePainPoint.id,
+      reviewId: negativeReview.id,
+      excerpt: "外盒被挤扁",
+      specificityScore: 4,
+      createdAt: now,
+    },
+    {
+      painPointId: neutralPainPoint.id,
+      reviewId: neutralReview.id,
+      excerpt: "先用一段时间再说",
+      specificityScore: 3,
+      createdAt: now + 1,
+    },
+    {
+      painPointId: positivePainPoint.id,
+      reviewId: positiveReview.id,
+      excerpt: excerptToken,
+      specificityScore: 5,
+      createdAt: now + 3,
+    },
+  ]);
+
+  await context.db.insert(context.schema.painPointSpecStats).values([
+    {
+      painPointId: negativePainPoint.id,
+      productSpec: "NEGATIVE_SPEC",
+      count: 1,
+    },
+    {
+      painPointId: neutralPainPoint.id,
+      productSpec: "NEUTRAL_SPEC",
+      count: 1,
+    },
+    {
+      painPointId: positivePainPoint.id,
+      productSpec: productSpecToken,
+      count: 1,
+    },
+  ]);
+
+  return {
+    appendToken,
+    excerptToken,
+    negativePainPointId: negativePainPoint.id,
+    neutralPainPointId: neutralPainPoint.id,
+    positivePainPointId: positivePainPoint.id,
+    productNameToken,
+    productSpecToken,
+    reviewContentToken,
+    shopId: shop.id,
+  };
+}
+
 async function seedPainPointBundle(context: TestContext, suffix: string): Promise<SeededPainPointBundle> {
   const now = 1_710_000_000 + suffix.charCodeAt(0);
   const [shop] = await context.db
@@ -915,6 +1888,8 @@ async function seedPainPointBundle(context: TestContext, suffix: string): Promis
 
   return {
     painPointId: painPoint.id,
+    productGroupId: group.id,
+    productRefId: product.id,
     reviewId: review.id,
     shopId: shop.id,
   };

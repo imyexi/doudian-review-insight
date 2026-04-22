@@ -266,8 +266,9 @@ function pickGroupingSeed(params: {
   rawName: string | null;
   doudianProductId: string;
   shortNameOverride?: string | null;
+  llmShortName?: string | null;
 }): string {
-  return [params.shortNameOverride, params.displayName, params.rawName, params.doudianProductId]
+  return [params.shortNameOverride, params.llmShortName, params.displayName, params.rawName, params.doudianProductId]
     .find((value): value is string => typeof value === "string" && value.trim().length > 0)
     ?.trim() ?? params.doudianProductId;
 }
@@ -298,6 +299,7 @@ export async function resolveProductGrouping(params: {
   displayName: string | null;
   rawName: string | null;
   shortNameOverride?: string | null;
+  llmShortName?: string | null;
 }): Promise<ResolvedProductGrouping> {
   const seed = pickGroupingSeed(params);
   const shortName = extractProductShortName(seed);

@@ -9,6 +9,17 @@ import { serializeProductGroup } from "../utils/productGroups";
 
 export const reviewsRouter = Router();
 
+function buildPainPointReviewCondition(shopId: number, painPointId: number) {
+  return sql`${reviews.id} in (
+    select ppe.review_id
+    from pain_point_evidence ppe
+    inner join reviews evidence_reviews on evidence_reviews.id = ppe.review_id
+    where ppe.pain_point_id = ${painPointId}
+      and evidence_reviews.shop_id = ${shopId}
+      and evidence_reviews.shop_id = ${reviews.shopId}
+  )`;
+}
+
 reviewsRouter.get("/", async (request, response) => {
   const parsed = reviewListQuerySchema.safeParse(request.query);
   if (!parsed.success) {
@@ -52,7 +63,7 @@ reviewsRouter.get("/", async (request, response) => {
   }
 
   if (painPointId && scopedPainPoint) {
-    conditions.push(sql`${reviews.id} in (select review_id from pain_point_evidence where pain_point_id = ${scopedPainPoint.id})`);
+    conditions.push(buildPainPointReviewCondition(shopId, scopedPainPoint.id));
   }
 
   const whereClause = and(...conditions);

@@ -13,6 +13,7 @@ interface AnalysisSettingsRecord {
   openaiModel: string;
   llmBatchSize: number;
   llmMaxConcurrency: number;
+  llmProductNameEnabled: boolean;
   updatedAt: number;
 }
 
@@ -41,6 +42,7 @@ function getDefaultSettingsRecord(): AnalysisSettingsRecord {
     openaiModel: env.OPENAI_MODEL,
     llmBatchSize: env.LLM_BATCH_SIZE,
     llmMaxConcurrency: env.LLM_MAX_CONCURRENCY,
+    llmProductNameEnabled: true,
     updatedAt: 0,
   };
 }
@@ -55,6 +57,7 @@ function coalesceRecord(row: typeof analysisSettings.$inferSelect | undefined): 
     openaiModel: row?.openaiModel ?? defaults.openaiModel,
     llmBatchSize: row?.llmBatchSize ?? defaults.llmBatchSize,
     llmMaxConcurrency: row?.llmMaxConcurrency ?? defaults.llmMaxConcurrency,
+    llmProductNameEnabled: row?.llmProductNameEnabled ?? defaults.llmProductNameEnabled,
     updatedAt: row?.updatedAt ?? defaults.updatedAt,
   };
 }
@@ -66,6 +69,7 @@ function toPublicSettings(record: AnalysisSettingsRecord): AnalysisSettings {
     openaiModel: record.openaiModel,
     llmBatchSize: record.llmBatchSize,
     llmMaxConcurrency: record.llmMaxConcurrency,
+    llmProductNameEnabled: record.llmProductNameEnabled,
     hasApiKey: Boolean(record.openaiApiKey),
     maskedApiKey: maskApiKey(record.openaiApiKey),
     updatedAt: record.updatedAt,
@@ -114,6 +118,7 @@ export async function updateAnalysisSettings(input: AnalysisSettingsUpdate): Pro
     openaiModel: input.openaiModel.trim(),
     llmBatchSize: input.llmBatchSize,
     llmMaxConcurrency: input.llmMaxConcurrency,
+    llmProductNameEnabled: input.llmProductNameEnabled,
     updatedAt: Math.floor(Date.now() / 1000),
   };
 
@@ -129,6 +134,7 @@ export async function updateAnalysisSettings(input: AnalysisSettingsUpdate): Pro
       openaiModel: nextRecord.openaiModel,
       llmBatchSize: nextRecord.llmBatchSize,
       llmMaxConcurrency: nextRecord.llmMaxConcurrency,
+      llmProductNameEnabled: nextRecord.llmProductNameEnabled,
       updatedAt: nextRecord.updatedAt,
     })
     .onConflictDoUpdate({
@@ -140,6 +146,7 @@ export async function updateAnalysisSettings(input: AnalysisSettingsUpdate): Pro
         openaiModel: nextRecord.openaiModel,
         llmBatchSize: nextRecord.llmBatchSize,
         llmMaxConcurrency: nextRecord.llmMaxConcurrency,
+        llmProductNameEnabled: nextRecord.llmProductNameEnabled,
         updatedAt: nextRecord.updatedAt,
       },
     });

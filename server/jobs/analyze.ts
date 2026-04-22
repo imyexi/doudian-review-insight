@@ -3,6 +3,8 @@ import { db } from "../db/client";
 import { products, reviews, uploads } from "../db/schema";
 import { analyzeReviews } from "../services/painPointAggregation";
 import { resolveProductGrouping } from "../services/productGrouping";
+import { getAnalysisRuntimeSettings } from "../utils/analysisSettings";
+import { extractProductNamesWithLlm } from "./llmProductName";
 import { parseExcel } from "./parseExcel";
 import { analyzeQueue } from "./queue";
 
@@ -20,6 +22,7 @@ function isUploadAnalysisCanceled(uploadId: number): boolean {
 async function ensureProduct(
   shopId: number,
   row: ReturnType<typeof parseExcel>[number],
+  llmExtractedName: string | null,
 ): Promise<{ productRefId: number; productGroupId: number | null }> {
   const [existing] = await db
     .select()
@@ -33,6 +36,7 @@ async function ensureProduct(
     displayName: existing?.displayName ?? null,
     rawName: row.productName,
     shortNameOverride: existing?.classificationLocked ? existing.shortName : null,
+    llmShortName: existing?.classificationLocked ? null : llmExtractedName,
   });
 
   if (existing) {
@@ -46,6 +50,7 @@ async function ensureProduct(
         productGroupId: nextProductGroupId,
         rawName: row.productName,
         shortName: nextShortName,
+        llmExtractedName: existing.classificationLocked ? existing.llmExtractedName : llmExtractedName,
         classificationSource: nextClassificationSource,
         updatedAt: Math.floor(Date.now() / 1000),
       })
@@ -65,6 +70,7 @@ async function ensureProduct(
       doudianProductId: row.productId,
       rawName: row.productName,
       shortName: grouping.shortName,
+      llmExtractedName,
       classificationSource: grouping.classificationSource,
       classificationLocked: false,
       updatedAt: Math.floor(Date.now() / 1000),
@@ -133,6 +139,25 @@ export async function analyzeUpload(uploadId: number): Promise<void> {
       progressTotal: rows.length,
     });
 
+    const analysisSettings = await getAnalysisRuntimeSettings();
+    const uniqueProducts = rows.reduce<Record<string, string>>((current, row) => {
+      if (!row.productId || !row.productName || current[row.productId]) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [row.productId]: row.productName,
+      };
+    }, {});
+
+    const llmProductNames = analysisSettings.analysisMode !== "rules_only" && analysisSettings.llmProductNameEnabled
+      ? await extractProductNamesWithLlm(
+          Object.entries(uniqueProducts).map(([doudianProductId, rawTitle]) => ({ doudianProductId, rawTitle })),
+          analysisSettings,
+        )
+      : {};
+
     const insertedReviewIds: number[] = [];
 
     for (let index = 0; index < rows.length; index += 1) {
@@ -141,7 +166,7 @@ export async function analyzeUpload(uploadId: number): Promise<void> {
       }
 
       const row = rows[index];
-      const productMatch = await ensureProduct(upload.shopId, row);
+      const productMatch = await ensureProduct(upload.shopId, row, llmProductNames[row.productId] ?? null);
       const reviewId = await insertReview(uploadId, upload.shopId, productMatch.productRefId, productMatch.productGroupId, row);
 
       if (reviewId) {

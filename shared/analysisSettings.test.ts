@@ -9,6 +9,7 @@ describe("analysis settings schemas", () => {
       openaiModel: "gpt-4o-mini",
       llmBatchSize: 20,
       llmMaxConcurrency: 3,
+      llmProductNameEnabled: true,
       hasApiKey: true,
       maskedApiKey: "sk-p***1234",
       updatedAt: 1775880000,
@@ -25,6 +26,7 @@ describe("analysis settings schemas", () => {
       openaiModel: "",
       llmBatchSize: "12",
       llmMaxConcurrency: "4",
+      llmProductNameEnabled: false,
     });
 
     expect(parsed.openaiBaseUrl).toBe("");
@@ -39,6 +41,7 @@ describe("analysis settings schemas", () => {
       openaiApiKey: "sk-test",
       llmBatchSize: "12",
       llmMaxConcurrency: "4",
+      llmProductNameEnabled: true,
     });
 
     expect(parsed.llmBatchSize).toBe(12);
@@ -52,6 +55,7 @@ describe("analysis settings schemas", () => {
       openaiModel: "",
       llmBatchSize: 20,
       llmMaxConcurrency: 3,
+      llmProductNameEnabled: true,
     });
 
     expect(parsed.success).toBe(false);
@@ -64,6 +68,7 @@ describe("analysis settings schemas", () => {
       openaiModel: "gpt-4o-mini",
       llmBatchSize: 0,
       llmMaxConcurrency: 99,
+      llmProductNameEnabled: true,
     });
 
     expect(parsed.success).toBe(false);

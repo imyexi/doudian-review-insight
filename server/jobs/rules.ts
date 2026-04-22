@@ -10,6 +10,8 @@ export interface RuleDefinition {
 export interface RuleMatch {
   canonicalLabel: string;
   category: PainPointCategory;
+  sentiment: "negative";
+  specificityScore: null;
   excerpt: string;
   source: "rule";
 }
@@ -53,6 +55,8 @@ export function findRuleMatches(content: string): RuleMatch[] {
       {
         canonicalLabel,
         category: definition.category,
+        sentiment: "negative" as const,
+        specificityScore: null,
         excerpt: matchedKeyword,
         source: "rule" as const,
       },

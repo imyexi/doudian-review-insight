@@ -16,6 +16,7 @@ interface ProductRowWithStats {
   displayName: string | null;
   rawName: string | null;
   shortName: string | null;
+  llmExtractedName: string | null;
   category: string | null;
   notes: string | null;
   classificationSource: string;
@@ -71,6 +72,7 @@ async function listProducts(shopId: number, productId?: number) {
       displayName: products.displayName,
       rawName: products.rawName,
       shortName: products.shortName,
+      llmExtractedName: products.llmExtractedName,
       category: products.category,
       notes: products.notes,
       classificationSource: products.classificationSource,

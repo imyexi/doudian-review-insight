@@ -64,7 +64,7 @@ describe("extractPainPointsWithLlm", () => {
           choices: [
             {
               delta: {
-                content: '"category":"物流","excerpt":"快递特别慢"}]}',
+                content: '"category":"物流","sentiment":"negative","specificityScore":2,"excerpt":"快递特别慢"}]}',
               },
               finish_reason: "stop",
             },
@@ -82,6 +82,7 @@ describe("extractPainPointsWithLlm", () => {
         openaiModel: "gpt-5.4",
         llmBatchSize: 20,
         llmMaxConcurrency: 3,
+        llmProductNameEnabled: true,
         updatedAt: 0,
       },
     );
@@ -95,11 +96,15 @@ describe("extractPainPointsWithLlm", () => {
           {
             role: "system",
             content: [
-              "你是评论痛点抽取助手。",
-              "请从评论中识别负面问题，只允许使用以下分类：质量、物流、款式外观、客服、价格、使用体验、其他。",
-              "输出严格 JSON 对象，键为 reviewId，值为数组。每个数组项包含 canonicalLabel、category、excerpt。",
+              "你是用户评论意见抽取助手。",
+              "请从评论中识别用户的具体意见，以负面问题为主，但如果有非常具体的正面反馈也请提取。",
+              "分类只允许：质量、物流、款式外观、客服、价格、使用体验、其他。",
+              "情感只允许：positive、negative、neutral。",
+              "对每条意见评估其具体程度（specificity），用 1-5 打分。1=非常模糊，2=略有方向但无细节，3=中等具体，4=比较具体，5=非常具体且可执行。",
+              "对于非常模糊的评论，如果无法提取出具体意见就返回空数组，不要勉强归类。",
+              "输出严格 JSON 对象，键为 reviewId，值为数组。每个数组项包含 canonicalLabel、category、sentiment、specificityScore、excerpt。",
               "不要输出 markdown，不要输出代码块，只返回 JSON。",
-              "label 必须是 15 字以内的通用名词短语，不要引入任何行业词。",
+              "label 必须是 15 字以内的通用名词短语。",
             ].join("\n"),
           },
           {
@@ -117,6 +122,8 @@ describe("extractPainPointsWithLlm", () => {
         {
           canonicalLabel: "物流慢",
           category: "物流",
+          sentiment: "negative",
+          specificityScore: 2,
           excerpt: "快递特别慢",
           source: "llm",
         },
@@ -140,7 +147,7 @@ describe("extractPainPointsWithLlm", () => {
           choices: [
             {
               delta: {
-                content: '\"2\":[{\"canonicalLabel\":\"客服慢\",\"category\":\"客服\",',
+                content: '\"2\":[{\"canonicalLabel\":\"客服慢\",\"category\":\"客服\",\"sentiment\":\"negative\",\"specificityScore\":2,',
               },
             },
           ],
@@ -167,6 +174,7 @@ describe("extractPainPointsWithLlm", () => {
         openaiModel: "gpt-5.4",
         llmBatchSize: 20,
         llmMaxConcurrency: 3,
+        llmProductNameEnabled: true,
         updatedAt: 0,
       },
     );
@@ -176,6 +184,8 @@ describe("extractPainPointsWithLlm", () => {
         {
           canonicalLabel: "客服慢",
           category: "客服",
+          sentiment: "negative",
+          specificityScore: 2,
           excerpt: "回复很敷衍",
           source: "llm",
         },
@@ -209,7 +219,7 @@ describe("extractPainPointsWithLlm", () => {
           choices: [
             {
               delta: {
-                content: '{"3":[{"canonicalLabel":"包装破损","category":"质量","excerpt":"盒子都压坏了"}]}',
+                content: '{"3":[{"canonicalLabel":"包装破损","category":"质量","sentiment":"negative","specificityScore":4,"excerpt":"盒子都压坏了"}]}',
               },
               finish_reason: "stop",
             },
@@ -227,6 +237,7 @@ describe("extractPainPointsWithLlm", () => {
         openaiModel: "gpt-5.4",
         llmBatchSize: 20,
         llmMaxConcurrency: 3,
+        llmProductNameEnabled: true,
         updatedAt: 0,
       },
     );
@@ -236,6 +247,8 @@ describe("extractPainPointsWithLlm", () => {
         {
           canonicalLabel: "包装破损",
           category: "质量",
+          sentiment: "negative",
+          specificityScore: 4,
           excerpt: "盒子都压坏了",
           source: "llm",
         },
@@ -267,6 +280,7 @@ describe("extractPainPointsWithLlm", () => {
         openaiModel: "gpt-5.4",
         llmBatchSize: 20,
         llmMaxConcurrency: 3,
+        llmProductNameEnabled: true,
         updatedAt: 0,
       },
     );
@@ -300,6 +314,7 @@ describe("extractPainPointsWithLlm", () => {
         openaiModel: "gpt-5.4",
         llmBatchSize: 20,
         llmMaxConcurrency: 3,
+        llmProductNameEnabled: true,
         updatedAt: 0,
       },
     );
@@ -334,6 +349,7 @@ describe("extractPainPointsWithLlm", () => {
           openaiModel: "gpt-5.4",
           llmBatchSize: 20,
           llmMaxConcurrency: 3,
+          llmProductNameEnabled: true,
           updatedAt: 0,
         },
       ),

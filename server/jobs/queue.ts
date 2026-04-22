@@ -124,6 +124,11 @@ export class JobQueue {
   enqueue(job: QueueJob): void {
     this.shuttingDown = false;
     this.cancelledJobIds.delete(job.id);
+
+    if (this.runningJobId === job.id || this.pending.some(pending => pending.id === job.id)) {
+      return;
+    }
+
     this.pending = [...this.pending, job];
     void this.processNext();
   }

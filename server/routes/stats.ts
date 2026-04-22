@@ -1,6 +1,6 @@
-import { and, desc, eq, gte, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import { Router } from "express";
-import type { PainPointCategory } from "@shared/types";
+import type { PainPointCategory, Sentiment } from "@shared/types";
 import { db } from "../db/client";
 import { painPoints, productGroups, reviews } from "../db/schema";
 import { sendError, sendSuccess } from "../utils/http";
@@ -19,7 +19,9 @@ interface TrendRow {
 interface TopPainPointRow {
   canonicalLabel: string;
   category: PainPointCategory;
+  sentiment: Sentiment;
   occurrenceCount: number;
+  specificityScore: number | null;
   lastSeenAt: number;
   productLabel: string | null;
 }
@@ -27,7 +29,9 @@ interface TopPainPointRow {
 interface TopPainPointAccumulator {
   canonicalLabel: string;
   category: PainPointCategory;
+  sentiment: Sentiment;
   occurrenceCount: number;
+  specificityScore: number | null;
   lastSeenAt: number;
   relatedProducts: string[];
   extraProductCount: number;
@@ -61,9 +65,13 @@ function getProductLabel(row: TopPainPointRow): string {
   return row.productLabel ?? STORE_LEVEL_PRODUCT_LABEL;
 }
 
+function getPainPointPriorityScore(occurrenceCount: number, specificityScore: number | null): number {
+  return occurrenceCount + (specificityScore ?? 0) * 3;
+}
+
 function normalizeTopPainPoints(rows: TopPainPointRow[]) {
   const aggregated = rows.reduce<Record<string, TopPainPointAccumulator>>((current, row) => {
-    const key = `${row.category}::${row.canonicalLabel}`;
+    const key = `${row.category}::${row.sentiment}::${row.canonicalLabel}`;
     const existing = current[key];
     const productLabel = getProductLabel(row);
     const nextProducts = existing
@@ -77,7 +85,9 @@ function normalizeTopPainPoints(rows: TopPainPointRow[]) {
       [key]: {
         canonicalLabel: row.canonicalLabel,
         category: row.category,
+        sentiment: row.sentiment,
         occurrenceCount: (existing?.occurrenceCount ?? 0) + row.occurrenceCount,
+        specificityScore: Math.max(existing?.specificityScore ?? 0, row.specificityScore ?? 0) || null,
         lastSeenAt: Math.max(existing?.lastSeenAt ?? 0, row.lastSeenAt),
         relatedProducts: nextProducts.slice(0, RELATED_PRODUCT_PREVIEW_LIMIT),
         extraProductCount: Math.max(nextProducts.length - RELATED_PRODUCT_PREVIEW_LIMIT, 0),
@@ -89,13 +99,21 @@ function normalizeTopPainPoints(rows: TopPainPointRow[]) {
   return Object.values(aggregated)
     .map(({ allProducts, ...item }) => item)
     .sort((left, right) => {
-      if (right.occurrenceCount !== left.occurrenceCount) {
-        return right.occurrenceCount - left.occurrenceCount;
+      const scoreDifference = getPainPointPriorityScore(right.occurrenceCount, right.specificityScore)
+        - getPainPointPriorityScore(left.occurrenceCount, left.specificityScore);
+      if (scoreDifference !== 0) {
+        return scoreDifference;
       }
 
       return right.lastSeenAt - left.lastSeenAt;
     })
     .slice(0, TOP_PAIN_POINT_LIMIT);
+}
+
+function normalizeSentimentFilter(value: unknown): Sentiment[] | undefined {
+  const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const filtered = values.filter((item): item is Sentiment => item === "positive" || item === "negative" || item === "neutral");
+  return filtered.length > 0 ? filtered : undefined;
 }
 
 export const statsRouter = Router();
@@ -107,6 +125,7 @@ statsRouter.get("/overview", async (request, response) => {
     return;
   }
 
+  const sentimentFilter = normalizeSentimentFilter(request.query.sentiment);
   const now = Math.floor(Date.now() / 1000);
   const newPainPointThreshold = now - SEVEN_DAYS_IN_SECONDS;
   const trendThreshold = now - THIRTY_DAYS_IN_SECONDS;
@@ -140,13 +159,21 @@ statsRouter.get("/overview", async (request, response) => {
       .select({
         canonicalLabel: painPoints.canonicalLabel,
         category: sql<PainPointCategory>`${painPoints.category}`,
+        sentiment: sql<Sentiment>`${painPoints.sentiment}`,
         occurrenceCount: painPoints.occurrenceCount,
+        specificityScore: painPoints.specificityScore,
         lastSeenAt: painPoints.lastSeenAt,
         productLabel: sql<string | null>`coalesce(${productGroups.name}, ${productGroups.shortName})`,
       })
       .from(painPoints)
       .leftJoin(productGroups, eq(productGroups.id, painPoints.productGroupId))
-      .where(and(eq(painPoints.shopId, shopId), eq(painPoints.status, "active"))),
+      .where(
+        and(
+          eq(painPoints.shopId, shopId),
+          eq(painPoints.status, "active"),
+          ...(sentimentFilter ? [inArray(painPoints.sentiment, sentimentFilter)] : []),
+        ),
+      ),
   ]);
 
   sendSuccess(response, {

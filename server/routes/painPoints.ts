@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { Router } from "express";
-import type { ReviewLevel } from "@shared/types";
+import type { ReviewLevel, Sentiment } from "@shared/types";
 import { painPointListQuerySchema } from "@shared/types";
 import { db } from "../db/client";
 import { painPointEvidence, painPointSpecStats, painPoints, productGroups, reviews } from "../db/schema";
@@ -9,12 +9,16 @@ import { sendError, sendSuccess } from "../utils/http";
 import { serializeProductGroup } from "../utils/productGroups";
 
 const SEVEN_DAYS_IN_SECONDS = 7 * 24 * 60 * 60;
+const NOTEWORTHY_SPECIFICITY_THRESHOLD = 4;
+const NOTEWORTHY_OCCURRENCE_LIMIT = 5;
+const NOTEWORTHY_RESULT_LIMIT = 5;
 
 interface RawEvidenceRow {
   id: number;
   painPointId: number;
   reviewId: number;
   excerpt: string | null;
+  specificityScore: number | null;
   createdAt: number;
   review: {
     id: number;
@@ -49,15 +53,22 @@ interface RawEvidenceRow {
 
 function normalizeListQuery(query: Record<string, unknown>): Record<string, unknown> {
   const rawCategory = query.category;
+  const rawSentiment = query.sentiment;
   const category = Array.isArray(rawCategory)
     ? rawCategory.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
     : typeof rawCategory === "string" && rawCategory.trim().length > 0
       ? [rawCategory]
       : undefined;
+  const sentiment = Array.isArray(rawSentiment)
+    ? rawSentiment.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : typeof rawSentiment === "string" && rawSentiment.trim().length > 0
+      ? [rawSentiment]
+      : undefined;
 
   return {
     ...query,
     category,
+    sentiment,
   };
 }
 
@@ -85,7 +96,49 @@ function serializeEvidenceRow(row: RawEvidenceRow) {
   };
 }
 
-async function loadEvidenceForPainPoints(painPointIds: number[]): Promise<Map<number, ReturnType<typeof serializeEvidenceRow>[]>> {
+function normalizeSentimentFilter(value: unknown): Sentiment[] | undefined {
+  const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const filtered = values.filter((item): item is Sentiment => item === "positive" || item === "negative" || item === "neutral");
+  return filtered.length > 0 ? filtered : undefined;
+}
+
+function matchesPainPointSearch(
+  q: string | undefined,
+  item: {
+    canonicalLabel: string;
+    description: string | null;
+    productGroup: {
+      name: string | null;
+      shortName: string | null;
+    } | null;
+  },
+  evidenceRows: Array<ReturnType<typeof serializeEvidenceRow>>,
+): boolean {
+  if (!q) {
+    return true;
+  }
+
+  const haystacks = [
+    item.canonicalLabel,
+    item.description,
+    item.productGroup?.name,
+    item.productGroup?.shortName,
+    ...evidenceRows.flatMap(evidence => [
+      evidence.excerpt,
+      evidence.review?.content,
+      evidence.review?.appendContent,
+      evidence.review?.productName,
+      evidence.review?.productSpec,
+    ]),
+  ];
+
+  return haystacks.some(value => typeof value === "string" && value.includes(q));
+}
+
+async function loadEvidenceForPainPoints(
+  shopId: number,
+  painPointIds: number[],
+): Promise<Map<number, ReturnType<typeof serializeEvidenceRow>[]>> {
   if (painPointIds.length === 0) {
     return new Map<number, ReturnType<typeof serializeEvidenceRow>[]>();
   }
@@ -96,6 +149,7 @@ async function loadEvidenceForPainPoints(painPointIds: number[]): Promise<Map<nu
       painPointId: painPointEvidence.painPointId,
       reviewId: painPointEvidence.reviewId,
       excerpt: painPointEvidence.excerpt,
+      specificityScore: painPointEvidence.specificityScore,
       createdAt: painPointEvidence.createdAt,
       review: {
         id: reviews.id,
@@ -130,7 +184,7 @@ async function loadEvidenceForPainPoints(painPointIds: number[]): Promise<Map<nu
     .from(painPointEvidence)
     .innerJoin(reviews, eq(reviews.id, painPointEvidence.reviewId))
     .leftJoin(productGroups, eq(productGroups.id, reviews.productGroupId))
-    .where(inArray(painPointEvidence.painPointId, painPointIds))
+    .where(and(eq(reviews.shopId, shopId), inArray(painPointEvidence.painPointId, painPointIds)))
     .orderBy(desc(reviews.reviewTime), desc(painPointEvidence.id));
 
   const evidenceRows = rows as unknown as RawEvidenceRow[];
@@ -139,6 +193,23 @@ async function loadEvidenceForPainPoints(painPointIds: number[]): Promise<Map<nu
 
 export const painPointsRouter = Router();
 
+function getPainPointOrderBy(sort: "occurrence" | "specificity" | "recent") {
+  if (sort === "specificity") {
+    return [
+      asc(sql`${painPoints.specificityScore} is null`),
+      desc(painPoints.specificityScore),
+      desc(painPoints.lastSeenAt),
+      desc(painPoints.id),
+    ] as const;
+  }
+
+  if (sort === "recent") {
+    return [desc(painPoints.lastSeenAt), desc(painPoints.id)] as const;
+  }
+
+  return [desc(painPoints.occurrenceCount), desc(painPoints.lastSeenAt), desc(painPoints.id)] as const;
+}
+
 painPointsRouter.get("/", async (request, response) => {
   const parsed = painPointListQuerySchema.safeParse(normalizeListQuery(request.query as Record<string, unknown>));
   if (!parsed.success) {
@@ -146,7 +217,7 @@ painPointsRouter.get("/", async (request, response) => {
     return;
   }
 
-  const { category, mode, productGroupId, productRefId, q, shopId } = parsed.data;
+  const { category, mode, productGroupId, productRefId, q, sentiment, shopId, sort } = parsed.data;
   const conditions = [eq(painPoints.shopId, shopId), eq(painPoints.status, "active")];
 
   if (productGroupId) {
@@ -169,10 +240,12 @@ painPointsRouter.get("/", async (request, response) => {
       productGroupId: painPoints.productGroupId,
       canonicalLabel: painPoints.canonicalLabel,
       category: painPoints.category,
+      sentiment: painPoints.sentiment,
       description: painPoints.description,
       firstSeenAt: painPoints.firstSeenAt,
       lastSeenAt: painPoints.lastSeenAt,
       occurrenceCount: painPoints.occurrenceCount,
+      specificityScore: painPoints.specificityScore,
       source: painPoints.source,
       status: painPoints.status,
       createdAt: painPoints.createdAt,
@@ -188,11 +261,9 @@ painPointsRouter.get("/", async (request, response) => {
     .from(painPoints)
     .leftJoin(productGroups, eq(productGroups.id, painPoints.productGroupId))
     .where(and(...conditions))
-    .orderBy(
-      mode === "new7d" ? desc(painPoints.firstSeenAt) : desc(painPoints.occurrenceCount),
-      desc(painPoints.lastSeenAt),
-      desc(painPoints.id),
-    );
+    .orderBy(...getPainPointOrderBy(sort));
+
+  const evidenceByPainPoint = await loadEvidenceForPainPoints(shopId, rows.map(item => item.id));
 
   const filteredRows = rows.filter(item => {
     if (mode === "new7d" && item.firstSeenAt < Math.floor(Date.now() / 1000) - SEVEN_DAYS_IN_SECONDS) {
@@ -203,18 +274,76 @@ painPointsRouter.get("/", async (request, response) => {
       return false;
     }
 
-    if (!q) {
-      return true;
+    if (sentiment && sentiment.length > 0 && !sentiment.includes(item.sentiment as typeof sentiment[number])) {
+      return false;
     }
 
-    return item.canonicalLabel.includes(q) || (item.description ?? "").includes(q);
+    return matchesPainPointSearch(q, item, evidenceByPainPoint.get(item.id) ?? []);
   });
-
-  const evidenceByPainPoint = await loadEvidenceForPainPoints(filteredRows.map(item => item.id));
 
   sendSuccess(
     response,
     filteredRows.map(item => ({
+      ...item,
+      productGroup: serializeProductGroup(item.productGroup),
+      topEvidence: evidenceByPainPoint.get(item.id) ?? [],
+    })),
+  );
+});
+
+painPointsRouter.get("/noteworthy", async (request, response) => {
+  const shopId = getShopIdQueryParam(request.query as Record<string, unknown>);
+  if (!Number.isInteger(shopId) || shopId <= 0) {
+    sendError(response, "INVALID_ID", "店铺 ID 无效", 400);
+    return;
+  }
+
+  const sentimentFilter = normalizeSentimentFilter(request.query.sentiment);
+  const rows = await db
+    .select({
+      id: painPoints.id,
+      shopId: painPoints.shopId,
+      productRefId: painPoints.productRefId,
+      productGroupId: painPoints.productGroupId,
+      canonicalLabel: painPoints.canonicalLabel,
+      category: painPoints.category,
+      sentiment: painPoints.sentiment,
+      description: painPoints.description,
+      firstSeenAt: painPoints.firstSeenAt,
+      lastSeenAt: painPoints.lastSeenAt,
+      occurrenceCount: painPoints.occurrenceCount,
+      specificityScore: painPoints.specificityScore,
+      source: painPoints.source,
+      status: painPoints.status,
+      createdAt: painPoints.createdAt,
+      productGroup: {
+        id: productGroups.id,
+        shopId: productGroups.shopId,
+        name: productGroups.name,
+        shortName: productGroups.shortName,
+        createdAt: productGroups.createdAt,
+        updatedAt: productGroups.updatedAt,
+      },
+    })
+    .from(painPoints)
+    .leftJoin(productGroups, eq(productGroups.id, painPoints.productGroupId))
+    .where(
+      and(
+        eq(painPoints.shopId, shopId),
+        eq(painPoints.status, "active"),
+        gte(painPoints.specificityScore, NOTEWORTHY_SPECIFICITY_THRESHOLD),
+        lte(painPoints.occurrenceCount, NOTEWORTHY_OCCURRENCE_LIMIT),
+        ...(sentimentFilter ? [inArray(painPoints.sentiment, sentimentFilter)] : []),
+      ),
+    )
+    .orderBy(desc(painPoints.specificityScore), desc(painPoints.lastSeenAt), desc(painPoints.id))
+    .limit(NOTEWORTHY_RESULT_LIMIT);
+
+  const evidenceByPainPoint = await loadEvidenceForPainPoints(shopId, rows.map(item => item.id));
+
+  sendSuccess(
+    response,
+    rows.map(item => ({
       ...item,
       productGroup: serializeProductGroup(item.productGroup),
       topEvidence: evidenceByPainPoint.get(item.id) ?? [],
@@ -242,6 +371,7 @@ painPointsRouter.get("/:id/evidence", async (request, response) => {
       painPointId: painPointEvidence.painPointId,
       reviewId: painPointEvidence.reviewId,
       excerpt: painPointEvidence.excerpt,
+      specificityScore: painPointEvidence.specificityScore,
       createdAt: painPointEvidence.createdAt,
       review: {
         id: reviews.id,
@@ -276,7 +406,7 @@ painPointsRouter.get("/:id/evidence", async (request, response) => {
     .from(painPointEvidence)
     .innerJoin(reviews, eq(reviews.id, painPointEvidence.reviewId))
     .leftJoin(productGroups, eq(productGroups.id, reviews.productGroupId))
-    .where(eq(painPointEvidence.painPointId, painPointId))
+    .where(and(eq(reviews.shopId, shopId), eq(painPointEvidence.painPointId, painPointId)))
     .orderBy(desc(reviews.reviewTime), desc(painPointEvidence.id));
 
   const evidenceRows = rows as unknown as RawEvidenceRow[];

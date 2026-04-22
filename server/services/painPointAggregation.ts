@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from "drizzle-orm";
-import type { AnalysisMode, PainPointCategory, PainPointSource } from "@shared/types";
+import type { AnalysisMode, PainPointCategory, PainPointSource, Sentiment } from "@shared/types";
 import { db } from "../db/client";
 import {
   painPointEvidence,
@@ -15,6 +15,8 @@ import { getAnalysisRuntimeSettings } from "../utils/analysisSettings";
 export interface Candidate {
   canonicalLabel: string;
   category: PainPointCategory;
+  sentiment: Sentiment;
+  specificityScore: number | null;
   excerpt: string;
   source: PainPointSource;
 }
@@ -29,6 +31,80 @@ function shouldUseLlm(mode: AnalysisMode): boolean {
 
 export function getReviewText(review: Pick<ReviewRow, "content" | "appendContent">): string {
   return [review.content, review.appendContent].filter(Boolean).join("\n").trim();
+}
+
+function mergeSentiment(current: Sentiment, next: Sentiment): Sentiment {
+  if (current === next) {
+    return current;
+  }
+
+  if (current === "negative" || next === "negative") {
+    return "negative";
+  }
+
+  if (current === "positive" || next === "positive") {
+    return "positive";
+  }
+
+  return "neutral";
+}
+
+function mergeSpecificityScore(current: number | null, next: number | null): number | null {
+  if (current === null) {
+    return next;
+  }
+
+  if (next === null) {
+    return current;
+  }
+
+  return Math.max(current, next);
+}
+
+function choosePreferredCandidate(current: Candidate, next: Candidate): Candidate {
+  const currentSpecificity = current.specificityScore ?? 0;
+  const nextSpecificity = next.specificityScore ?? 0;
+
+  if (nextSpecificity > currentSpecificity) {
+    return next;
+  }
+
+  if (nextSpecificity < currentSpecificity) {
+    return current;
+  }
+
+  if (current.source !== "llm" && next.source === "llm") {
+    return next;
+  }
+
+  return current;
+}
+
+function mergeCandidateLists(candidates: Candidate[]): Candidate[] {
+  const mergedCandidates = candidates.reduce<Record<string, Candidate>>((current, candidate) => {
+    const candidateKey = normalizeLabel(candidate.canonicalLabel);
+    const existing = current[candidateKey];
+    if (!existing) {
+      return {
+        ...current,
+        [candidateKey]: candidate,
+      };
+    }
+
+    const preferredCandidate = choosePreferredCandidate(existing, candidate);
+
+    return {
+      ...current,
+      [candidateKey]: {
+        ...preferredCandidate,
+        sentiment: mergeSentiment(existing.sentiment, candidate.sentiment),
+        specificityScore: mergeSpecificityScore(existing.specificityScore, candidate.specificityScore),
+        source: existing.source === candidate.source ? preferredCandidate.source : "merged",
+      },
+    };
+  }, {});
+
+  return Object.values(mergedCandidates);
 }
 
 export function getCandidatesForReview(
@@ -50,7 +126,8 @@ export function getCandidatesForReview(
   }
 
   const ruleCandidates = findRuleMatches(text);
-  return ruleCandidates.length > 0 ? ruleCandidates : llmCandidates[review.id] ?? [];
+  const reviewLlmCandidates = llmCandidates[review.id] ?? [];
+  return mergeCandidateLists([...ruleCandidates, ...reviewLlmCandidates]);
 }
 
 async function upsertPainPoint(
@@ -80,6 +157,8 @@ async function upsertPainPoint(
         lastSeenAt: Math.max(existing.lastSeenAt, review.reviewTime),
         firstSeenAt: Math.min(existing.firstSeenAt, review.reviewTime),
         occurrenceCount: existing.occurrenceCount + 1,
+        sentiment: mergeSentiment(existing.sentiment as Sentiment, candidate.sentiment),
+        specificityScore: mergeSpecificityScore(existing.specificityScore, candidate.specificityScore),
         source: existing.source === candidate.source ? existing.source : "merged",
       })
       .where(eq(painPoints.id, existing.id));
@@ -92,9 +171,11 @@ async function upsertPainPoint(
         productGroupId: review.productGroupId,
         canonicalLabel: candidate.canonicalLabel,
         category: candidate.category,
+        sentiment: candidate.sentiment,
         firstSeenAt: review.reviewTime,
         lastSeenAt: review.reviewTime,
         occurrenceCount: 1,
+        specificityScore: candidate.specificityScore,
         source: candidate.source,
       })
       .returning({ id: painPoints.id });
@@ -108,6 +189,7 @@ async function upsertPainPoint(
       painPointId,
       reviewId: review.id,
       excerpt: candidate.excerpt,
+      specificityScore: candidate.specificityScore,
     })
     .onConflictDoNothing();
 
@@ -145,7 +227,7 @@ export async function analyzeReviews(items: ReviewRow[]): Promise<void> {
   const llmCandidates = shouldUseLlm(analysisSettings.analysisMode)
     ? await extractPainPointsWithLlm(
         items
-          .filter(review => getReviewText(review).length > 0 && (analysisSettings.analysisMode === "llm_only" || review.rating === null || review.rating <= 3))
+          .filter(review => getReviewText(review).length > 0)
           .map(review => ({
             reviewId: review.id,
             content: getReviewText(review),

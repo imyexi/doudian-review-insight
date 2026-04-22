@@ -18,7 +18,7 @@ function isPathWithin(rootPath: string, targetPath: string): boolean {
   return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
-function toDistinctPositiveIds(values: Array<number | null | undefined>): number[] {
+export function toDistinctPositiveIds(values: Array<number | null | undefined>): number[] {
   return [...new Set(values.filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value > 0))];
 }
 
@@ -36,7 +36,7 @@ function removeStoredUploadFile(storedPath: string, uploadId: number): void {
   }
 }
 
-async function deleteAffectedOrphanProductGroups(shopId: number, groupIds: number[]): Promise<void> {
+export async function deleteAffectedOrphanProductGroups(shopId: number, groupIds: number[]): Promise<void> {
   if (groupIds.length === 0) {
     return;
   }
