@@ -1,5 +1,6 @@
 import { useMemo, useState, type ChangeEvent, type ReactElement } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "wouter";
 import type { Upload } from "@shared/types";
 import { apiDelete, apiGet, apiPost, ApiRequestError } from "@/api/client";
 import { EmptyShopState } from "@/components/EmptyShopState";
@@ -130,10 +131,19 @@ export function UploadsPage(): ReactElement {
   return (
     <section className="stack-lg">
       <div className="split-panel split-panel--balanced">
-        <section className="surface panel-card">
-          <span className="eyebrow">Upload Batch</span>
-          <h3>上传评论 Excel</h3>
-          <p>当前店铺：{selectedShop.name}。上传后会自动进入队列，经历解析、写入、痛点分析三个阶段。系统会按文件内容校验，同一店铺重复上传完全相同的 Excel 会被拦截。</p>
+        <section className="surface panel-card stack-md">
+          <span className="eyebrow">Step 1</span>
+          <h3>先上传评论批次</h3>
+          <p>当前店铺：{selectedShop.name}。这里先接住从抖店后台导出的评论 Excel，系统会依次完成解析、写入和痛点分析；处理完成后，就可以直接进入痛点页和评论页继续排查。</p>
+
+          <div className="button-row">
+            <Link className="button button--ghost" href="/pain-points">
+              去看痛点
+            </Link>
+            <Link className="button button--ghost" href="/reviews">
+              查看评论
+            </Link>
+          </div>
 
           <label className="upload-dropzone">
             <input className="sr-only" type="file" accept=".xlsx,.xls" onChange={handleFileChange} />
@@ -170,8 +180,8 @@ export function UploadsPage(): ReactElement {
         </section>
 
         <section className="surface panel-card">
-          <span className="eyebrow">History</span>
-          <h3>上传批次历史</h3>
+          <span className="eyebrow">Queue & History</span>
+          <h3>上传队列与历史</h3>
           <div className="list-stack">
             {uploads.length > 0 ? (
               uploads.map(upload => {
@@ -227,7 +237,7 @@ export function UploadsPage(): ReactElement {
                 );
               })
             ) : (
-              <p>还没有上传记录。上传第一份 Excel 后，这里会显示处理状态和历史批次。</p>
+              <p>还没有上传记录。先导入第一份 Excel，处理完成后再继续去痛点页查看问题、去评论页核对原话。</p>
             )}
           </div>
         </section>

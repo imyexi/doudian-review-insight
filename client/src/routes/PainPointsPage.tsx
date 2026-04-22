@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import type {
   OverviewStats,
   PainPoint,
@@ -287,6 +288,24 @@ export function PainPointsPage(): ReactElement {
 
   return (
     <section className="stack-lg">
+      <section className="surface panel-card stack-md">
+        <div className="row-heading row-heading--spread">
+          <div>
+            <span className="eyebrow">Step 2</span>
+            <h3>{selectedShop.name} 的痛点排查</h3>
+          </div>
+          <div className="button-row button-row--tight">
+            <Link className="button button--ghost" href="/uploads">
+              返回上传
+            </Link>
+            <Link className="button button--ghost" href="/reviews">
+              去看评论
+            </Link>
+          </div>
+        </div>
+        <p>这里把上传后的评论收束成可筛选的痛点视图：先看值得关注的具体意见，再按商品、分类、情绪和证据关键词缩小范围，最后进入评论页核对原话。</p>
+      </section>
+
       <div className="dashboard-grid dashboard-grid--four">
         <article className="metric-card surface">
           <span>历史痛点</span>
@@ -314,7 +333,7 @@ export function PainPointsPage(): ReactElement {
         <div className="row-heading row-heading--spread">
           <div>
             <span className="eyebrow">Filters</span>
-            <h3>{selectedShop.name} 的痛点全景</h3>
+            <h3>按商品、情绪和证据缩小范围</h3>
           </div>
           <div className="segmented-control" role="tablist" aria-label="痛点模式">
             <button
@@ -420,7 +439,7 @@ export function PainPointsPage(): ReactElement {
           </div>
           <span className="pill pill--accent">高具体度 · 低频</span>
         </div>
-        <p>这里会优先展示全店里少见但描述具体、值得直接排查或放大验证的意见。</p>
+        <p>这里会优先展示全店里少见但描述具体、值得直接排查或放大验证的意见。确认信号后，可继续到评论页核对原始评论与追评。</p>
         <div className="list-stack">
           {noteworthyPainPoints.length > 0 ? (
             noteworthyPainPoints.map(item => {

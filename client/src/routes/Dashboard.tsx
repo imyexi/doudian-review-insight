@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "wouter";
 import type { OverviewStats, Sentiment } from "@shared/types";
 import { apiGet } from "@/api/client";
 import { EmptyShopState } from "@/components/EmptyShopState";
@@ -60,19 +61,19 @@ export function DashboardPage(): ReactElement {
   if (!selectedShop) {
     return (
       <EmptyShopState
-        kicker="Dashboard"
+        kicker="Workspace"
         title="先选择店铺"
-        body="先在店铺页创建并选中一个店铺，总览页才会展示评论走势、负评占比和新增痛点。"
+        body="选中店铺后，工作台首页会先带你进入上传、痛点和评论主线，再补充概览指标。"
       />
     );
   }
 
   if (statsQuery.isLoading) {
     return (
-      <div className="surface panel-card">
-        <span className="eyebrow">Dashboard</span>
-        <h3>正在加载 {selectedShop.name} 的总览...</h3>
-        <p>统计接口已接通，正在读取评论规模、趋势和痛点摘要。</p>
+      <div className="surface panel-card stack-md">
+        <span className="eyebrow">Workspace Home</span>
+        <h3>正在加载 {selectedShop.name} 的工作台首页...</h3>
+        <p>先整理关键概览，再为你保留上传、痛点和评论的快捷入口。</p>
       </div>
     );
   }
@@ -80,16 +81,61 @@ export function DashboardPage(): ReactElement {
   const stats = statsQuery.data;
   if (!stats) {
     return (
-      <div className="surface panel-card">
-        <span className="eyebrow">Dashboard</span>
-        <h3>暂时没有可展示的数据</h3>
-        <p>你可以先上传该店铺的评论 Excel，解析完成后这里会自动出现概览指标。</p>
+      <div className="surface panel-card stack-md">
+        <span className="eyebrow">Workspace Home</span>
+        <h3>先上传第一批评论，再开始看痛点</h3>
+        <p>你可以直接从这里进入上传页，把评论 Excel 导入后，再回来看概览、痛点和原始评论。</p>
+        <div className="button-row">
+          <Link className="button" href="/uploads">
+            去上传评论
+          </Link>
+          <Link className="button button--ghost" href="/pain-points">
+            查看痛点页
+          </Link>
+        </div>
       </div>
     );
   }
 
   return (
     <section className="stack-lg">
+      <section className="dashboard-hero">
+        <article className="surface panel-card dashboard-hero__intro">
+          <span className="eyebrow">Workspace Home</span>
+          <h3>{selectedShop.name} 的分析主线</h3>
+          <p>先看上传是否完成，再进入痛点页定位问题，最后到评论页核对原话和规格证据。下面的概览指标只保留判断优先级所需的信息。</p>
+          <div className="button-row">
+            <Link className="button" href="/uploads">
+              继续上传
+            </Link>
+            <Link className="button button--ghost" href="/pain-points">
+              去看痛点
+            </Link>
+            <Link className="button button--ghost" href="/reviews">
+              查看评论
+            </Link>
+          </div>
+        </article>
+
+        <aside className="dashboard-hero__actions">
+          <Link className="quick-link-card" href="/uploads">
+            <span className="eyebrow">Step 1</span>
+            <strong>上传批次</strong>
+            <p>导入新的评论 Excel，跟进解析、写入和分析进度。</p>
+          </Link>
+          <Link className="quick-link-card" href="/pain-points">
+            <span className="eyebrow">Step 2</span>
+            <strong>查看痛点</strong>
+            <p>优先排查高频、最近新增和值得关注的具体意见。</p>
+          </Link>
+          <Link className="quick-link-card" href="/reviews">
+            <span className="eyebrow">Step 3</span>
+            <strong>核对评论</strong>
+            <p>按商品、评分、规格和痛点回看原始评论与追评。</p>
+          </Link>
+        </aside>
+      </section>
+
       <div className="dashboard-grid dashboard-grid--four">
         <article className="metric-card surface">
           <span>总评论量</span>
@@ -99,7 +145,7 @@ export function DashboardPage(): ReactElement {
         <article className="metric-card surface accent-card">
           <span>近 7 天新增痛点</span>
           <strong>{stats.painPoints.new7d}</strong>
-          <p>按评论时间首现判定，而不是按上传时间统计。</p>
+          <p>快速判断近期有没有新问题冒头。</p>
         </article>
         <article className="metric-card surface">
           <span>负评占比</span>
@@ -109,7 +155,7 @@ export function DashboardPage(): ReactElement {
         <article className="metric-card surface">
           <span>平均评分</span>
           <strong>{formatDecimal(stats.avgRating)}</strong>
-          <p>可用于快速判断近期整体满意度水平。</p>
+          <p>用于判断整体满意度是否有波动。</p>
         </article>
       </div>
 
@@ -137,7 +183,7 @@ export function DashboardPage(): ReactElement {
           <div className="row-heading row-heading--spread">
             <div>
               <span className="eyebrow">Top Pain Points</span>
-              <h3>高频痛点</h3>
+              <h3>优先关注的痛点</h3>
             </div>
             <span className="pill">已筛选 {stats.topPainPoints.length}</span>
           </div>

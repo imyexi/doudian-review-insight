@@ -2,7 +2,7 @@ import { useMemo, type ReactElement } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Route, Switch, useLocation } from "wouter";
 import { apiGet, apiPost } from "@/api/client";
-import { AppShell, type NavigationItem } from "@/components/AppShell";
+import { AppShell, type NavigationItem, type NavigationSection } from "@/components/AppShell";
 import { ShopProvider, useShop } from "@/hooks/useShop";
 import { DashboardPage } from "@/routes/Dashboard";
 import { AnalysisSettingsPage } from "@/routes/AnalysisSettingsPage";
@@ -12,15 +12,47 @@ import { ReviewsPage } from "@/routes/ReviewsPage";
 import { ShopsPage } from "@/routes/ShopsPage";
 import { UploadsPage } from "@/routes/UploadsPage";
 
-const NAVIGATION: NavigationItem[] = [
-  { href: "/", label: "总览", description: "店铺概览与最近趋势" },
-  { href: "/shops", label: "店铺", description: "维护多个店铺资料" },
-  { href: "/products", label: "商品", description: "补充商品别名与分类" },
-  { href: "/uploads", label: "上传", description: "导入评论 Excel 批次" },
-  { href: "/analysis-settings", label: "分析设置", description: "切换规则与 LLM 分析策略" },
-  { href: "/pain-points", label: "痛点", description: "历史与新增痛点总览" },
-  { href: "/reviews", label: "评论", description: "按条件浏览原始评论" },
+const OVERVIEW_NAVIGATION: NavigationItem[] = [
+  { href: "/", label: "工作台首页", description: "快速进入上传、痛点与评论主线" },
 ];
+
+const PRIMARY_NAVIGATION: NavigationItem[] = [
+  { href: "/uploads", label: "上传", description: "导入评论 Excel 并跟进处理进度" },
+  { href: "/pain-points", label: "痛点", description: "优先排查高频与值得关注的意见" },
+  { href: "/reviews", label: "评论", description: "下钻查看原始评论、追评与证据" },
+];
+
+const SECONDARY_NAVIGATION: NavigationItem[] = [
+  { href: "/shops", label: "店铺", description: "维护店铺资料与登录后的工作上下文" },
+  { href: "/products", label: "商品", description: "管理商品分组、别名与展示名称" },
+  { href: "/analysis-settings", label: "分析设置", description: "调整规则与 LLM 提取策略" },
+];
+
+const NAVIGATION_SECTIONS: NavigationSection[] = [
+  {
+    id: "overview",
+    label: "工作台入口",
+    items: OVERVIEW_NAVIGATION,
+    tone: "overview",
+  },
+  {
+    id: "primary",
+    label: "主要流程",
+    description: "上传评论、定位痛点、核对原始评论",
+    items: PRIMARY_NAVIGATION,
+    tone: "primary",
+  },
+  {
+    id: "secondary",
+    label: "配置与维护",
+    description: "店铺、商品与分析策略",
+    items: SECONDARY_NAVIGATION,
+    collapsible: true,
+    tone: "secondary",
+  },
+];
+
+const ALL_NAVIGATION_ITEMS = NAVIGATION_SECTIONS.flatMap(section => section.items);
 
 interface AuthState {
   authenticated: boolean;
@@ -64,6 +96,14 @@ function LoginPage({ isSubmitting, onSubmit }: LoginPageProps): ReactElement {
   );
 }
 
+function matchesNavigationItem(location: string, href: string): boolean {
+  if (href === "/") {
+    return location === "/";
+  }
+
+  return location === href || location.startsWith(`${href}/`);
+}
+
 function AppLayout(): ReactElement {
   const [location, navigate] = useLocation();
   const { selectedShopId, setSelectedShopId, shops } = useShop();
@@ -75,7 +115,7 @@ function AppLayout(): ReactElement {
   });
 
   const pageMeta = useMemo(() => {
-    const current = NAVIGATION.find(item => location === item.href || location.startsWith(`${item.href}/`));
+    const current = ALL_NAVIGATION_ITEMS.find(item => matchesNavigationItem(location, item.href));
     return {
       title: current?.label ?? "工作台",
       description: current?.description ?? "浏览本地评论分析数据。",
@@ -86,7 +126,7 @@ function AppLayout(): ReactElement {
     <AppShell
       currentPath={location}
       description={pageMeta.description}
-      navigation={NAVIGATION}
+      navigationSections={NAVIGATION_SECTIONS}
       onLogout={async () => {
         await logoutMutation.mutateAsync();
       }}
