@@ -526,6 +526,25 @@ h3 {
   grid-column: span 2;
 }
 
+.search-field {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.search-field__controls {
+  display: flex;
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+.search-field__controls .input {
+  flex: 1;
+}
+
+.search-field__button {
+  min-width: 96px;
+}
+
 .textarea {
   min-height: 120px;
   resize: vertical;
@@ -824,5 +843,13 @@ h3 {
   .boot-card,
   .auth-panel {
     padding: 1rem;
+  }
+
+  .search-field__controls {
+    flex-direction: column;
+  }
+
+  .search-field__button {
+    width: 100%;
   }
 }

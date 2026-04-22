@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactElement } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent, type ReactElement } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
 import type {
@@ -9,6 +9,7 @@ import type {
   PainPointMode,
   PainPointSort,
   Product,
+  ProductGroup,
   Sentiment,
   SpecStat,
 } from "@shared/types";
@@ -25,7 +26,7 @@ const SORT_OPTIONS: Array<{ label: string; value: PainPointSort }> = [
   { label: "按时间", value: "recent" },
 ];
 
-type ProductFilterValue = "all" | number;
+type ProductGroupFilterValue = "all" | number;
 
 interface CategorySummaryItem {
   category: PainPointCategory;
@@ -93,15 +94,20 @@ function getSpecificityPillClassName(score: number | null): string {
   return "pill";
 }
 
+function getProductGroupLabel(productGroup: ProductGroup): string {
+  return productGroup.name;
+}
+
 export function PainPointsPage(): ReactElement {
   const { selectedShop, selectedShopId } = useShop();
   const [mode, setMode] = useState<PainPointMode>("historical");
   const [sort, setSort] = useState<PainPointSort>("occurrence");
+  const [searchInput, setSearchInput] = useState<string>("");
   const [search, setSearch] = useState<string>("");
   const [selectedCategories, setSelectedCategories] = useState<PainPointCategory[]>([]);
   const [selectedSentiments, setSelectedSentiments] = useState<Sentiment[]>([]);
   const [selectedPainPointId, setSelectedPainPointId] = useState<number | null>(null);
-  const [selectedProductId, setSelectedProductId] = useState<ProductFilterValue>("all");
+  const [selectedProductGroupId, setSelectedProductGroupId] = useState<ProductGroupFilterValue>("all");
 
   const productsQuery = useQuery({
     queryKey: ["products", selectedShopId],
@@ -110,13 +116,17 @@ export function PainPointsPage(): ReactElement {
   });
 
   const products = useMemo(() => productsQuery.data ?? [], [productsQuery.data]);
-  const selectedProductGroupId = useMemo(() => {
-    if (selectedProductId === "all") {
-      return undefined;
-    }
+  const productGroups = useMemo<ProductGroup[]>(() => {
+    const groupsById = products.reduce<Map<number, ProductGroup>>((current, product) => {
+      if (!product.productGroup) {
+        return current;
+      }
 
-    return products.find(product => product.id === selectedProductId)?.productGroupId ?? undefined;
-  }, [products, selectedProductId]);
+      return new Map(current).set(product.productGroup.id, product.productGroup);
+    }, new Map<number, ProductGroup>());
+
+    return Array.from(groupsById.values()).sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+  }, [products]);
 
   const statsQuery = useQuery({
     queryKey: ["stats", selectedShopId],
@@ -130,7 +140,6 @@ export function PainPointsPage(): ReactElement {
       selectedShopId,
       mode,
       sort,
-      selectedProductId,
       selectedProductGroupId,
       search,
       selectedCategories,
@@ -142,7 +151,7 @@ export function PainPointsPage(): ReactElement {
           shopId: selectedShopId ?? undefined,
           mode,
           sort,
-          productGroupId: selectedProductGroupId,
+          productGroupId: selectedProductGroupId === "all" ? undefined : selectedProductGroupId,
           category: selectedCategories,
           sentiment: selectedSentiments,
           q: search || undefined,
@@ -234,15 +243,15 @@ export function PainPointsPage(): ReactElement {
   const maxSpecCount = useMemo(() => Math.max(...specStats.map(item => item.count), 1), [specStats]);
 
   useEffect(() => {
-    if (selectedProductId === "all") {
+    if (selectedProductGroupId === "all") {
       return;
     }
 
-    const hasSelectedProduct = products.some(product => product.id === selectedProductId);
-    if (!hasSelectedProduct) {
-      setSelectedProductId("all");
+    const hasSelectedProductGroup = productGroups.some(group => group.id === selectedProductGroupId);
+    if (!hasSelectedProductGroup) {
+      setSelectedProductGroupId("all");
     }
-  }, [products, selectedProductId]);
+  }, [productGroups, selectedProductGroupId]);
 
   useEffect(() => {
     if (!selectedPainPoint) {
@@ -257,9 +266,14 @@ export function PainPointsPage(): ReactElement {
     }
   }, [selectedPainPoint, selectedPainPointId]);
 
-  function handleProductChange(event: ChangeEvent<HTMLSelectElement>): void {
+  function handleProductGroupChange(event: ChangeEvent<HTMLSelectElement>): void {
     const value = event.target.value;
-    setSelectedProductId(value ? Number(value) : "all");
+    setSelectedProductGroupId(value ? Number(value) : "all");
+  }
+
+  function handleSearchSubmit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    setSearch(searchInput.trim());
   }
 
   function toggleCategory(category: PainPointCategory): void {
@@ -325,7 +339,7 @@ export function PainPointsPage(): ReactElement {
         <article className="metric-card surface">
           <span>当前筛出</span>
           <strong>{painPoints.length}</strong>
-          <p>受模式、排序、商品、分类和关键词筛选影响。</p>
+          <p>受模式、排序、商品组和关键词筛选影响。</p>
         </article>
       </div>
 
@@ -372,26 +386,31 @@ export function PainPointsPage(): ReactElement {
 
           <div className="filter-grid filter-grid--three">
             <label className="field-group">
-              <span>商品</span>
-              <select className="input" value={selectedProductId === "all" ? "" : selectedProductId} onChange={handleProductChange}>
-                <option value="">全部商品</option>
-                {products.map(product => (
-                  <option key={product.id} value={product.id}>
-                    {product.displayName || product.rawName || product.doudianProductId}
+              <span>商品组</span>
+              <select className="input" value={selectedProductGroupId === "all" ? "" : selectedProductGroupId} onChange={handleProductGroupChange}>
+                <option value="">全部商品组</option>
+                {productGroups.map(group => (
+                  <option key={group.id} value={group.id}>
+                    {getProductGroupLabel(group)}
                   </option>
                 ))}
               </select>
             </label>
 
-            <label className="field-group field-span-2">
+            <form className="field-group field-span-2 search-field" onSubmit={handleSearchSubmit}>
               <span>搜索</span>
-              <input
-                className="input"
-                value={search}
-                onChange={event => setSearch(event.target.value)}
-                placeholder="按标签、证据评论、追评、商品名或规格搜索，例如 包装 / 太硬 / S码 / 回购"
-              />
-            </label>
+              <div className="search-field__controls">
+                <input
+                  className="input"
+                  value={searchInput}
+                  onChange={event => setSearchInput(event.target.value)}
+                  placeholder="按标签、证据评论、追评、商品名或规格搜索，例如 包装 / 太硬 / S码 / 回购"
+                />
+                <button className="button button--ghost search-field__button" type="submit">
+                  搜索
+                </button>
+              </div>
+            </form>
           </div>
 
           <div className="field-group field-group--compact">
