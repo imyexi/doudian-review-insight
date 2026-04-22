@@ -276,6 +276,17 @@ export function PainPointsPage(): ReactElement {
     setSearch(searchInput.trim());
   }
 
+  function resetFilters(): void {
+    setMode("historical");
+    setSort("occurrence");
+    setSearchInput("");
+    setSearch("");
+    setSelectedCategories([]);
+    setSelectedSentiments([]);
+    setSelectedPainPointId(null);
+    setSelectedProductGroupId("all");
+  }
+
   function toggleCategory(category: PainPointCategory): void {
     setSelectedCategories(current =>
       current.includes(category) ? current.filter(item => item !== category) : [...current, category],
@@ -349,21 +360,26 @@ export function PainPointsPage(): ReactElement {
             <span className="eyebrow">Filters</span>
             <h3>按商品、情绪和证据缩小范围</h3>
           </div>
-          <div className="segmented-control" role="tablist" aria-label="痛点模式">
-            <button
-              className={`segmented-control__item ${mode === "historical" ? "segmented-control__item--active" : ""}`}
-              type="button"
-              onClick={() => setMode("historical")}
-            >
-              历史痛点
+          <div className="button-row button-row--tight">
+            <button className="button button--ghost" type="button" onClick={resetFilters}>
+              重置筛选
             </button>
-            <button
-              className={`segmented-control__item ${mode === "new7d" ? "segmented-control__item--active" : ""}`}
-              type="button"
-              onClick={() => setMode("new7d")}
-            >
-              近 7 天新增
-            </button>
+            <div className="segmented-control" role="tablist" aria-label="痛点模式">
+              <button
+                className={`segmented-control__item ${mode === "historical" ? "segmented-control__item--active" : ""}`}
+                type="button"
+                onClick={() => setMode("historical")}
+              >
+                历史痛点
+              </button>
+              <button
+                className={`segmented-control__item ${mode === "new7d" ? "segmented-control__item--active" : ""}`}
+                type="button"
+                onClick={() => setMode("new7d")}
+              >
+                近 7 天新增
+              </button>
+            </div>
           </div>
         </div>
 

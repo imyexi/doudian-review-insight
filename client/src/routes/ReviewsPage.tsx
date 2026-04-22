@@ -145,6 +145,15 @@ export function ReviewsPage(): ReactElement {
     resetPagination();
   }
 
+  function resetFilters(): void {
+    setPage(1);
+    setSearch("");
+    setSpec("");
+    setSelectedProductGroupId("all");
+    setSelectedPainPointId(null);
+    setSelectedRating("all");
+  }
+
   if (!selectedShop) {
     return (
       <EmptyShopState
@@ -181,7 +190,12 @@ export function ReviewsPage(): ReactElement {
             <span className="eyebrow">Review Filters</span>
             <h3>按商品组、痛点和关键词筛选评论</h3>
           </div>
-          <span className="pill pill--accent">共 {total} 条</span>
+          <div className="button-row button-row--tight">
+            <button className="button button--ghost" type="button" onClick={resetFilters}>
+              重置筛选
+            </button>
+            <span className="pill pill--accent">共 {total} 条</span>
+          </div>
         </div>
 
         <div className="filter-grid filter-grid--three">
