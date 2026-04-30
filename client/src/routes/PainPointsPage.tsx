@@ -98,6 +98,11 @@ function getProductGroupLabel(productGroup: ProductGroup): string {
   return productGroup.name;
 }
 
+function getPainPointTypeLabel(item: PainPoint): string {
+  const specificityLabel = getSpecificityLabel(item.specificityScore);
+  return specificityLabel ? `${item.category} · ${specificityLabel}` : item.category;
+}
+
 export function PainPointsPage(): ReactElement {
   const { selectedShop, selectedShopId } = useShop();
   const [mode, setMode] = useState<PainPointMode>("historical");
@@ -518,7 +523,7 @@ export function PainPointsPage(): ReactElement {
             {painPoints.length > 0 ? (
               painPoints.map(item => {
                 const isSelected = item.id === selectedPainPoint?.id;
-                const specificityLabel = getSpecificityLabel(item.specificityScore);
+                const representativeEvidence = (item.topEvidence ?? []).slice(0, 3);
 
                 return (
                   <article
@@ -526,36 +531,28 @@ export function PainPointsPage(): ReactElement {
                     className={`list-row list-row--card list-row--tall list-row--interactive ${isSelected ? "list-row--selected" : ""}`}
                     onClick={() => setSelectedPainPointId(item.id)}
                   >
-                    <div className="stack-sm">
-                      <div className="row-heading row-heading--spread">
+                    <div className="pain-point-list-card stack-sm">
+                      <div className="row-heading row-heading--spread pain-point-list-card__header">
                         <strong>{item.canonicalLabel}</strong>
-                        <div className="button-row button-row--tight">
-                          <span className="pill pill--accent">{item.category}</span>
-                          <span className={getSentimentPillClassName(item.sentiment)}>{getSentimentLabel(item.sentiment)}</span>
-                          {specificityLabel ? <span className={getSpecificityPillClassName(item.specificityScore)}>{specificityLabel}</span> : null}
-                          {mode === "new7d" ? <span className="pill pill--danger">新增</span> : null}
-                        </div>
+                        {mode === "new7d" ? <span className="pill pill--danger">新增</span> : null}
                       </div>
-                      <p>出现次数：{item.occurrenceCount} · 首次出现：{formatTimestamp(item.firstSeenAt)} · 最近出现：{formatTimestamp(item.lastSeenAt)}</p>
-                      {item.description ? <p>{item.description}</p> : null}
-                      <div className="evidence-list evidence-list--compact">
-                        {(item.topEvidence ?? []).slice(0, 3).map(evidence => {
-                          const evidenceSpecificityLabel = getSpecificityLabel(evidence.specificityScore);
-
-                          return (
-                            <blockquote key={evidence.id} className="evidence-card">
-                              <div className="stack-sm">
-                                <p>{getEvidenceText(evidence)}</p>
-                                <small>
-                                  {evidence.review?.productSpec || "未标注规格"} · {formatTimestamp(evidence.review?.reviewTime)}
-                                </small>
-                                {evidenceSpecificityLabel ? (
-                                  <span className={getSpecificityPillClassName(evidence.specificityScore)}>{evidenceSpecificityLabel}</span>
-                                ) : null}
-                              </div>
+                      <div className="pain-point-list-card__meta">
+                        <span>商品组：{item.productGroup?.name || item.productGroup?.shortName || "店铺级"}</span>
+                        <span>总出现：{item.occurrenceCount}</span>
+                        <span>近 7 天：{item.recent7dOccurrenceCount}</span>
+                        <span>痛点类型：{getPainPointTypeLabel(item)}</span>
+                        <span>情绪：{getSentimentLabel(item.sentiment)}</span>
+                      </div>
+                      <div className="pain-point-list-card__quotes">
+                        {representativeEvidence.length > 0 ? (
+                          representativeEvidence.map(evidence => (
+                            <blockquote key={evidence.id} className="pain-point-list-card__quote">
+                              {getEvidenceText(evidence)}
                             </blockquote>
-                          );
-                        })}
+                          ))
+                        ) : (
+                          <p className="pain-point-list-card__empty">暂无代表性评论。</p>
+                        )}
                       </div>
                     </div>
                   </article>

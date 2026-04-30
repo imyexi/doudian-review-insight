@@ -5,9 +5,16 @@ import path from "node:path";
 import { eq } from "drizzle-orm";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PainPointCategory } from "@shared/types";
+import type { LlmPainPointCandidate } from "../jobs/llm";
 
-const { extractProductNamesMock } = vi.hoisted(() => ({
+const { extractProductNamesMock, extractPainPointsMock } = vi.hoisted(() => ({
   extractProductNamesMock: vi.fn(async () => ({} as Record<string, string>)),
+  extractPainPointsMock: vi.fn(async () => ({} as Record<number, LlmPainPointCandidate[]>)),
+}));
+
+vi.mock("../jobs/llm", () => ({
+  extractPainPointsWithLlm: extractPainPointsMock,
 }));
 
 vi.mock("../jobs/llmProductName", () => ({
@@ -39,6 +46,8 @@ describe("grouping regression routes", () => {
   beforeEach(async () => {
     extractProductNamesMock.mockReset();
     extractProductNamesMock.mockResolvedValue({});
+    extractPainPointsMock.mockReset();
+    extractPainPointsMock.mockResolvedValue({});
     context = await setupTestContext();
   });
 
@@ -93,6 +102,7 @@ describe("grouping regression routes", () => {
     }
 
     expect(payload.data).toHaveLength(1);
+    expect(payload.data[0]?.recent7dOccurrenceCount).toBe(0);
     expect(payload.data[0]?.topEvidence).toHaveLength(1);
     expect(payload.data[0]?.topEvidence?.[0]?.reviewId).toBe(shopA.reviewId);
   });
@@ -1122,6 +1132,170 @@ describe("grouping regression routes", () => {
     expect(remainingPainPoints).toHaveLength(0);
   });
 
+  it("merges thin texture label variants into one pain point", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedLlmPainPointLabelFixture(currentContext, ["质地过稀", "质地偏稀"]);
+    extractPainPointsMock.mockResolvedValue({
+      [fixture.reviewIds[0]]: [createLlmPainPointCandidate("质地过稀", "使用体验")],
+      [fixture.reviewIds[1]]: [createLlmPainPointCandidate("质地偏稀", "使用体验")],
+    });
+
+    await currentContext.analyzeReviews(
+      await currentContext.db
+        .select()
+        .from(currentContext.schema.reviews)
+        .where(eq(currentContext.schema.reviews.shopId, fixture.shopId)),
+    );
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const response = await fetch(`${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical`, {
+      headers: { cookie },
+    });
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<PainPointListApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+
+    expect(payload.data).toHaveLength(1);
+    expect(payload.data[0]?.canonicalLabel).toBe("质地偏稀");
+    expect(payload.data[0]?.occurrenceCount).toBe(2);
+    expect(payload.data[0]?.topEvidence).toHaveLength(2);
+  });
+
+  it("merges thin texture wording variants into one pain point", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedLlmPainPointLabelFixture(currentContext, ["质地稀薄", "质地偏稀"]);
+    extractPainPointsMock.mockResolvedValue({
+      [fixture.reviewIds[0]]: [createLlmPainPointCandidate("质地稀薄", "使用体验")],
+      [fixture.reviewIds[1]]: [createLlmPainPointCandidate("质地偏稀", "使用体验")],
+    });
+
+    await currentContext.analyzeReviews(
+      await currentContext.db
+        .select()
+        .from(currentContext.schema.reviews)
+        .where(eq(currentContext.schema.reviews.shopId, fixture.shopId)),
+    );
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const response = await fetch(`${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical`, {
+      headers: { cookie },
+    });
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<PainPointListApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+
+    expect(payload.data).toHaveLength(1);
+    expect(payload.data[0]?.canonicalLabel).toBe("质地偏稀");
+    expect(payload.data[0]?.occurrenceCount).toBe(2);
+    expect(payload.data[0]?.topEvidence).toHaveLength(2);
+  });
+
+  it("merges expensive price label variants into one pain point", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedLlmPainPointLabelFixture(currentContext, ["价格偏高", "价格偏贵"]);
+    extractPainPointsMock.mockResolvedValue({
+      [fixture.reviewIds[0]]: [createLlmPainPointCandidate("价格偏高", "价格")],
+      [fixture.reviewIds[1]]: [createLlmPainPointCandidate("价格偏贵", "价格")],
+    });
+
+    await currentContext.analyzeReviews(
+      await currentContext.db
+        .select()
+        .from(currentContext.schema.reviews)
+        .where(eq(currentContext.schema.reviews.shopId, fixture.shopId)),
+    );
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const response = await fetch(`${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical`, {
+      headers: { cookie },
+    });
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<PainPointListApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+
+    expect(payload.data).toHaveLength(1);
+    expect(payload.data[0]?.canonicalLabel).toBe("价格偏高");
+    expect(payload.data[0]?.occurrenceCount).toBe(2);
+    expect(payload.data[0]?.topEvidence).toHaveLength(2);
+  });
+
+  it("deduplicates synonymous labels from the same review", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedLlmPainPointLabelFixture(currentContext, ["质地偏稀"]);
+    extractPainPointsMock.mockResolvedValue({
+      [fixture.reviewIds[0]]: [
+        createLlmPainPointCandidate("质地过稀", "使用体验"),
+        createLlmPainPointCandidate("质地偏稀", "使用体验"),
+      ],
+    });
+
+    await currentContext.analyzeReviews(
+      await currentContext.db
+        .select()
+        .from(currentContext.schema.reviews)
+        .where(eq(currentContext.schema.reviews.shopId, fixture.shopId)),
+    );
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const response = await fetch(`${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical`, {
+      headers: { cookie },
+    });
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<PainPointListApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+
+    expect(payload.data).toHaveLength(1);
+    expect(payload.data[0]?.occurrenceCount).toBe(1);
+    expect(payload.data[0]?.topEvidence).toHaveLength(1);
+  });
+
+  it("keeps unrelated pain point labels separate", async () => {
+    const currentContext = requireContext(context);
+    const fixture = await seedLlmPainPointLabelFixture(currentContext, ["价格偏高", "物流太慢"]);
+    extractPainPointsMock.mockResolvedValue({
+      [fixture.reviewIds[0]]: [createLlmPainPointCandidate("价格偏高", "价格")],
+      [fixture.reviewIds[1]]: [createLlmPainPointCandidate("物流太慢", "物流")],
+    });
+
+    await currentContext.analyzeReviews(
+      await currentContext.db
+        .select()
+        .from(currentContext.schema.reviews)
+        .where(eq(currentContext.schema.reviews.shopId, fixture.shopId)),
+    );
+
+    const cookie = await login(currentContext.baseUrl, currentContext.env.APP_PASSWORD);
+    const response = await fetch(`${currentContext.baseUrl}/api/pain-points?shopId=${fixture.shopId}&mode=historical`, {
+      headers: { cookie },
+    });
+    expect(response.status).toBe(200);
+
+    const payload = await readJson<PainPointListApiResponse>(response);
+    expect(payload.ok).toBe(true);
+    if (!payload.ok) {
+      throw new Error("expected a successful pain point payload");
+    }
+
+    expect(payload.data).toHaveLength(2);
+    expect(payload.data.map(item => item.canonicalLabel).sort()).toEqual(["价格偏高", "物流太慢"]);
+  });
+
   it("filters overview top pain points by a single sentiment", async () => {
     const currentContext = requireContext(context);
     const fixture = await seedSentimentSearchFixture(currentContext);
@@ -1288,6 +1462,11 @@ interface SeededSentimentSearchFixture {
   shopId: number;
 }
 
+interface SeededLlmPainPointLabelFixture {
+  reviewIds: number[];
+  shopId: number;
+}
+
 interface SeededPainPointBundle {
   painPointId: number;
   productGroupId: number;
@@ -1418,6 +1597,7 @@ interface PainPointListItem {
   id: number;
   canonicalLabel?: string;
   occurrenceCount: number;
+  recent7dOccurrenceCount: number;
   sentiment?: string;
   topEvidence?: PainPointEvidenceApiItem[];
 }
@@ -1574,6 +1754,86 @@ async function login(baseUrl: string, password: string): Promise<string> {
 
 async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
+}
+
+function createLlmPainPointCandidate(canonicalLabel: string, category: PainPointCategory): LlmPainPointCandidate {
+  return {
+    canonicalLabel,
+    category,
+    sentiment: "negative",
+    specificityScore: 4,
+    excerpt: canonicalLabel,
+    source: "llm",
+  };
+}
+
+async function seedLlmPainPointLabelFixture(
+  context: TestContext,
+  labels: string[],
+): Promise<SeededLlmPainPointLabelFixture> {
+  const now = 1_710_500_000;
+  const [shop] = await context.db
+    .insert(context.schema.shops)
+    .values({ name: "LLM Pain Point Label Shop" })
+    .returning({ id: context.schema.shops.id });
+
+  const [group] = await context.db
+    .insert(context.schema.productGroups)
+    .values({
+      shopId: shop.id,
+      name: "LLM Pain Point Label Group",
+      shortName: "llm-pain-point-label-group",
+      updatedAt: now,
+    })
+    .returning({ id: context.schema.productGroups.id });
+
+  const [product] = await context.db
+    .insert(context.schema.products)
+    .values({
+      shopId: shop.id,
+      productGroupId: group.id,
+      doudianProductId: "llm-pain-point-label-product",
+      rawName: "聚类测试商品",
+      shortName: "llm-pain-point-label-group",
+      classificationSource: "auto",
+      classificationLocked: false,
+      updatedAt: now,
+    })
+    .returning({ id: context.schema.products.id });
+
+  await context.db.insert(context.schema.analysisSettings).values({
+    id: 1,
+    analysisMode: "llm_only",
+    openaiBaseUrl: "http://example.com/openai/v1",
+    openaiApiKey: "test-key",
+    openaiModel: "test-model",
+    llmBatchSize: 20,
+    llmMaxConcurrency: 2,
+    llmProductNameEnabled: false,
+    updatedAt: now,
+  });
+
+  const reviewRows = await context.db
+    .insert(context.schema.reviews)
+    .values(labels.map((label, index) => ({
+      shopId: shop.id,
+      productRefId: product.id,
+      productGroupId: group.id,
+      doudianOrderId: `llm-label-order-${index}`,
+      doudianProductId: "llm-pain-point-label-product",
+      productName: "聚类测试商品",
+      productSpec: "标准装",
+      content: `这次反馈是${label}`,
+      appendContent: null,
+      reviewTime: now + index,
+      merchantReplied: false,
+    })))
+    .returning({ id: context.schema.reviews.id });
+
+  return {
+    reviewIds: reviewRows.map(item => item.id),
+    shopId: shop.id,
+  };
 }
 
 async function seedSentimentSearchFixture(context: TestContext): Promise<SeededSentimentSearchFixture> {

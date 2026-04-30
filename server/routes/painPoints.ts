@@ -191,6 +191,31 @@ async function loadEvidenceForPainPoints(
   return groupEvidenceRows(evidenceRows.map(serializeEvidenceRow));
 }
 
+async function loadRecentOccurrenceCounts(shopId: number, painPointIds: number[]): Promise<Map<number, number>> {
+  if (painPointIds.length === 0) {
+    return new Map<number, number>();
+  }
+
+  const threshold = Math.floor(Date.now() / 1000) - SEVEN_DAYS_IN_SECONDS;
+  const rows = await db
+    .select({
+      painPointId: painPointEvidence.painPointId,
+      count: sql<number>`count(*)`,
+    })
+    .from(painPointEvidence)
+    .innerJoin(reviews, eq(reviews.id, painPointEvidence.reviewId))
+    .where(
+      and(
+        eq(reviews.shopId, shopId),
+        inArray(painPointEvidence.painPointId, painPointIds),
+        gte(reviews.reviewTime, threshold),
+      ),
+    )
+    .groupBy(painPointEvidence.painPointId);
+
+  return rows.reduce((map, row) => new Map(map).set(row.painPointId, row.count), new Map<number, number>());
+}
+
 export const painPointsRouter = Router();
 
 function getPainPointOrderBy(sort: "occurrence" | "specificity" | "recent") {
@@ -264,6 +289,7 @@ painPointsRouter.get("/", async (request, response) => {
     .orderBy(...getPainPointOrderBy(sort));
 
   const evidenceByPainPoint = await loadEvidenceForPainPoints(shopId, rows.map(item => item.id));
+  const recentOccurrenceCounts = await loadRecentOccurrenceCounts(shopId, rows.map(item => item.id));
 
   const filteredRows = rows.filter(item => {
     if (mode === "new7d" && item.firstSeenAt < Math.floor(Date.now() / 1000) - SEVEN_DAYS_IN_SECONDS) {
@@ -285,6 +311,7 @@ painPointsRouter.get("/", async (request, response) => {
     response,
     filteredRows.map(item => ({
       ...item,
+      recent7dOccurrenceCount: recentOccurrenceCounts.get(item.id) ?? 0,
       productGroup: serializeProductGroup(item.productGroup),
       topEvidence: evidenceByPainPoint.get(item.id) ?? [],
     })),
@@ -340,11 +367,13 @@ painPointsRouter.get("/noteworthy", async (request, response) => {
     .limit(NOTEWORTHY_RESULT_LIMIT);
 
   const evidenceByPainPoint = await loadEvidenceForPainPoints(shopId, rows.map(item => item.id));
+  const recentOccurrenceCounts = await loadRecentOccurrenceCounts(shopId, rows.map(item => item.id));
 
   sendSuccess(
     response,
     rows.map(item => ({
       ...item,
+      recent7dOccurrenceCount: recentOccurrenceCounts.get(item.id) ?? 0,
       productGroup: serializeProductGroup(item.productGroup),
       topEvidence: evidenceByPainPoint.get(item.id) ?? [],
     })),

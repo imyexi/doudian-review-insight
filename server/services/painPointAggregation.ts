@@ -21,8 +21,30 @@ export interface Candidate {
   source: PainPointSource;
 }
 
+const LABEL_SYNONYM_REPLACEMENTS: Array<[RegExp, string]> = [
+  [/质地稀薄/g, "质地偏稀"],
+  [/质地(?:过|偏|太|很|较)?稀/g, "质地偏稀"],
+  [/价格(?:偏|过|太|很|较)?(?:高|贵)/g, "价格偏高"],
+];
+
 function normalizeLabel(value: string): string {
-  return value.replace(/\s+/g, "").trim().toLowerCase();
+  const compactLabel = value.replace(/\s+/g, "").trim().toLowerCase();
+  return LABEL_SYNONYM_REPLACEMENTS.reduce(
+    (currentLabel, [pattern, replacement]) => currentLabel.replace(pattern, replacement),
+    compactLabel,
+  );
+}
+
+function normalizeCandidateLabel(candidate: Candidate): Candidate {
+  const normalizedLabel = normalizeLabel(candidate.canonicalLabel);
+  if (candidate.canonicalLabel === normalizedLabel) {
+    return candidate;
+  }
+
+  return {
+    ...candidate,
+    canonicalLabel: normalizedLabel,
+  };
 }
 
 function shouldUseLlm(mode: AnalysisMode): boolean {
@@ -82,24 +104,26 @@ function choosePreferredCandidate(current: Candidate, next: Candidate): Candidat
 
 function mergeCandidateLists(candidates: Candidate[]): Candidate[] {
   const mergedCandidates = candidates.reduce<Record<string, Candidate>>((current, candidate) => {
-    const candidateKey = normalizeLabel(candidate.canonicalLabel);
+    const normalizedCandidate = normalizeCandidateLabel(candidate);
+    const candidateKey = normalizedCandidate.canonicalLabel;
     const existing = current[candidateKey];
     if (!existing) {
       return {
         ...current,
-        [candidateKey]: candidate,
+        [candidateKey]: normalizedCandidate,
       };
     }
 
-    const preferredCandidate = choosePreferredCandidate(existing, candidate);
+    const preferredCandidate = choosePreferredCandidate(existing, normalizedCandidate);
 
     return {
       ...current,
       [candidateKey]: {
         ...preferredCandidate,
-        sentiment: mergeSentiment(existing.sentiment, candidate.sentiment),
-        specificityScore: mergeSpecificityScore(existing.specificityScore, candidate.specificityScore),
-        source: existing.source === candidate.source ? preferredCandidate.source : "merged",
+        canonicalLabel: candidateKey,
+        sentiment: mergeSentiment(existing.sentiment, normalizedCandidate.sentiment),
+        specificityScore: mergeSpecificityScore(existing.specificityScore, normalizedCandidate.specificityScore),
+        source: existing.source === normalizedCandidate.source ? preferredCandidate.source : "merged",
       },
     };
   }, {});
@@ -237,7 +261,7 @@ export async function analyzeReviews(items: ReviewRow[]): Promise<void> {
     : {};
 
   for (const review of items) {
-    const combinedCandidates = getCandidatesForReview(review, analysisSettings.analysisMode, llmCandidates);
+    const combinedCandidates = mergeCandidateLists(getCandidatesForReview(review, analysisSettings.analysisMode, llmCandidates));
 
     for (const candidate of combinedCandidates) {
       await upsertPainPoint(review, candidate);

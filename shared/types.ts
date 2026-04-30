@@ -146,6 +146,7 @@ export const painPointSchema = z.object({
   firstSeenAt: z.number().int().nonnegative(),
   lastSeenAt: z.number().int().nonnegative(),
   occurrenceCount: z.number().int().nonnegative(),
+  recent7dOccurrenceCount: z.number().int().nonnegative(),
   specificityScore: z.number().int().min(1).max(5).nullable(),
   source: painPointSourceSchema,
   status: painPointStatusSchema,
